@@ -451,20 +451,8 @@ wss.on('connection', (ws: WebSocket) => {
         room.accusedPlayerId = suspectPlayerId;
         room.isCorrectGuess = accused.role === room.targetRoleToCatch;
         room.roundPhase = 'resolved';
-        broadcastRoomState(room);
-      }
 
-      // 10. Next Round
-      else if (data.type === 'NEXT_ROUND') {
-        const { roomId } = data;
-        const room = rooms.get(roomId);
-        if (!room) return;
-
-        // Apply scores per points table:
-        // Babu: 1000
-        // Police: 500 if correct, 0 if wrong
-        // Dakat: 400 if not caught, 0 if caught
-        // Chor: 100 if not caught, 0 if caught
+        // Automatically calculate and record scores in Score Khata immediately
         room.players.forEach((p) => {
           let earned = 0;
           if (p.role === 'babu') {
@@ -488,6 +476,15 @@ wss.on('connection', (ws: WebSocket) => {
           p.scoreHistory.push(earned);
           p.totalScore += earned;
         });
+
+        broadcastRoomState(room);
+      }
+
+      // 10. Next Round
+      else if (data.type === 'NEXT_ROUND') {
+        const { roomId } = data;
+        const room = rooms.get(roomId);
+        if (!room) return;
 
         if (room.currentRound >= room.totalRounds) {
           room.status = 'finished';

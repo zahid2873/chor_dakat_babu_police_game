@@ -21,13 +21,51 @@
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
 }
 
-/* Darker wooden school desk background */
-.school-desk-bg {
-  background-color: #2b1d0c;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 0),
-                    radial-gradient(rgba(0, 0, 0, 0.3) 1px, transparent 0);
-  background-position: 0 0, 25px 25px;
-  background-size: 50px 50px;
+/* Warm teak wood default background with ambient lighting vignette */
+.school-desk-bg, .theme-wood {
+  background-color: #211309;
+  background-image: 
+    radial-gradient(ellipse at 50% 25%, rgba(138, 79, 36, 0.35) 0%, transparent 70%),
+    radial-gradient(circle at 15% 85%, rgba(94, 52, 23, 0.25) 0%, transparent 50%),
+    radial-gradient(circle at 85% 85%, rgba(94, 52, 23, 0.25) 0%, transparent 50%),
+    radial-gradient(rgba(255, 230, 180, 0.04) 1px, transparent 0),
+    radial-gradient(rgba(0, 0, 0, 0.45) 1px, transparent 0);
+  background-position: center, center, center, 0 0, 25px 25px;
+  background-size: 100% 100%, 100% 100%, 100% 100%, 50px 50px, 50px 50px;
+}
+
+/* Vintage Classroom Green Chalkboard Theme */
+.theme-green {
+  background-color: #0b1a13;
+  background-image:
+    radial-gradient(ellipse at 50% 25%, rgba(26, 77, 54, 0.45) 0%, transparent 75%),
+    radial-gradient(circle at 20% 80%, rgba(16, 51, 35, 0.3) 0%, transparent 50%),
+    radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 0),
+    radial-gradient(rgba(0, 0, 0, 0.5) 1px, transparent 0);
+  background-position: center, center, 0 0, 25px 25px;
+  background-size: 100% 100%, 100% 100%, 45px 45px, 45px 45px;
+}
+
+/* Deep Royal Ink Navy Theme */
+.theme-navy {
+  background-color: #0c1524;
+  background-image:
+    radial-gradient(ellipse at 50% 25%, rgba(30, 58, 104, 0.45) 0%, transparent 75%),
+    radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 0),
+    radial-gradient(rgba(0, 0, 0, 0.5) 1px, transparent 0);
+  background-position: center, 0 0, 25px 25px;
+  background-size: 100% 100%, 45px 45px, 45px 45px;
+}
+
+/* Rich Mahogany Desk Theme */
+.theme-mahogany {
+  background-color: #1a0c0c;
+  background-image:
+    radial-gradient(ellipse at 50% 25%, rgba(94, 28, 28, 0.4) 0%, transparent 75%),
+    radial-gradient(rgba(255, 230, 230, 0.04) 1px, transparent 0),
+    radial-gradient(rgba(0, 0, 0, 0.5) 1px, transparent 0);
+  background-position: center, 0 0, 25px 25px;
+  background-size: 100% 100%, 45px 45px, 45px 45px;
 }
 
 /* Blue Ballpoint Ink text style */

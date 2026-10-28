@@ -22,10 +22,30 @@ import {
   Globe,
   User,
   Users,
+  Palette,
 } from 'lucide-react';
 
 export default function App() {
   const [isMuted, setIsMuted] = useState(() => sound.getMuted());
+
+  // Background Theme State
+  const [bgTheme, setBgTheme] = useState<'wood' | 'green' | 'navy' | 'mahogany'>(() => {
+    return (localStorage.getItem('cpdb_bg_theme') as any) || 'wood';
+  });
+
+  const handleSetBgTheme = (theme: 'wood' | 'green' | 'navy' | 'mahogany') => {
+    setBgTheme(theme);
+    localStorage.setItem('cpdb_bg_theme', theme);
+  };
+
+  const bgThemeClass =
+    bgTheme === 'green'
+      ? 'theme-green'
+      : bgTheme === 'navy'
+      ? 'theme-navy'
+      : bgTheme === 'mahogany'
+      ? 'theme-mahogany'
+      : 'theme-wood';
 
   // Player Profile with persistence
   const [playerName, setPlayerName] = useState(() => {
@@ -50,6 +70,7 @@ export default function App() {
   const [isScoreDrawerOpen, setIsScoreDrawerOpen] = useState(false);
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Match State
   const [gameMode, setGameMode] = useState<GameMode>('vsBots');
@@ -191,7 +212,8 @@ export default function App() {
           setIsMatchmakingActive(true);
           setMatchmakingWaitingCount(data.waitingCount || 1);
         } else if (data.type === 'ERROR') {
-          alert(data.message);
+          setErrorMessage(data.message);
+          setTimeout(() => setErrorMessage(null), 4000);
         }
       } catch (err) {
         console.error('WS Error:', err);
@@ -334,31 +356,33 @@ export default function App() {
   // Start a local round
   const startLocalRound = (
     roundNum: number,
-    basePlayers = players,
+    explicitPlayers?: PaperPlayer[],
     isNewMatch = false
   ) => {
     const roles = shuffleRoles();
 
-    const updatedPlayers = basePlayers.map((player, idx) => {
-      const assignedRole = roles[idx];
-      const roleDef = ROLE_DEFINITIONS[assignedRole];
-      const randomDialogue =
-        roleDef.dialogues[Math.floor(Math.random() * roleDef.dialogues.length)];
-      const randomReaction =
-        BLUFF_REACTIONS[Math.floor(Math.random() * BLUFF_REACTIONS.length)].text;
+    setPlayers((prev) => {
+      const source = explicitPlayers || prev;
+      return source.map((player, idx) => {
+        const assignedRole = roles[idx];
+        const roleDef = ROLE_DEFINITIONS[assignedRole];
+        const randomDialogue =
+          roleDef.dialogues[Math.floor(Math.random() * roleDef.dialogues.length)];
+        const randomReaction =
+          BLUFF_REACTIONS[Math.floor(Math.random() * BLUFF_REACTIONS.length)].text;
 
-      return {
-        ...player,
-        role: assignedRole,
-        hasSeenChit: true,
-        currentDialogue: randomDialogue,
-        currentReaction: randomReaction,
-        scoreHistory: isNewMatch ? [] : player.scoreHistory,
-        totalScore: isNewMatch ? 0 : player.totalScore,
-      };
+        return {
+          ...player,
+          role: assignedRole,
+          hasSeenChit: true,
+          currentDialogue: randomDialogue,
+          currentReaction: randomReaction,
+          scoreHistory: isNewMatch ? [] : player.scoreHistory,
+          totalScore: isNewMatch ? 0 : player.totalScore,
+        };
+      });
     });
 
-    setPlayers(updatedPlayers);
     setAccusedPlayerId(null);
     setIsCorrectGuess(false);
     setIsBotPoliceThinking(false);
@@ -367,10 +391,16 @@ export default function App() {
     setCurrentRound(roundNum);
 
     // If Bot is Police, trigger AI investigation
-    const policePlayer = updatedPlayers.find((p) => p.role === 'police')!;
-    if (policePlayer.isBot) {
-      triggerBotPoliceDeduction(policePlayer, updatedPlayers);
-    }
+    const policeIdx = roles.indexOf('police');
+    setTimeout(() => {
+      setPlayers((current) => {
+        const pol = current[policeIdx];
+        if (pol && pol.isBot) {
+          triggerBotPoliceDeduction(pol, current);
+        }
+        return current;
+      });
+    }, 200);
   };
 
   // Bot Police AI Investigation
@@ -410,6 +440,27 @@ export default function App() {
       setIsCorrectGuess(isCorrect);
       setRoundPhase('resolved');
 
+      // AUTOMATICALLY CALCULATE & ADD SCORE TO KHATA IMMEDIATELY FOR THIS ROUND!
+      setPlayers((prev) =>
+        prev.map((p) => {
+          let earned = 0;
+          if (p.role === 'babu') earned = 1000;
+          else if (p.role === 'police') earned = isCorrect ? 500 : 0;
+          else if (p.role === 'dakat') {
+            earned = targetRoleToCatch === 'dakat' && isCorrect && p.id === suspectPlayerId ? 0 : 400;
+          } else if (p.role === 'chor') {
+            earned = targetRoleToCatch === 'chor' && isCorrect && p.id === suspectPlayerId ? 0 : 100;
+          }
+
+          return {
+            ...p,
+            scoreHistory: [...p.scoreHistory, earned],
+            totalScore: p.totalScore + earned,
+          };
+        })
+      );
+
+      sound.playPenScratch(); // Pen scratch sound as scores are recorded into the khata!
       if (isCorrect) sound.playSuccess();
       else sound.playWrong();
     }
@@ -423,30 +474,6 @@ export default function App() {
         JSON.stringify({ type: 'NEXT_ROUND', roomId: activeRoomId })
       );
     } else {
-      // Offline calculation per updated points:
-      // Babu: 1000
-      // Police: 500 if correct, 0 if wrong
-      // Dakat: 400 if not caught, 0 if caught
-      // Chor: 100 if not caught, 0 if caught
-      setPlayers((prev) =>
-        prev.map((p) => {
-          let earned = 0;
-          if (p.role === 'babu') earned = 1000;
-          else if (p.role === 'police') earned = isCorrectGuess ? 500 : 0;
-          else if (p.role === 'dakat') {
-            earned = targetRoleToCatch === 'dakat' && isCorrectGuess && p.id === accusedPlayerId ? 0 : 400;
-          } else if (p.role === 'chor') {
-            earned = targetRoleToCatch === 'chor' && isCorrectGuess && p.id === accusedPlayerId ? 0 : 100;
-          }
-
-          return {
-            ...p,
-            scoreHistory: [...p.scoreHistory, earned],
-            totalScore: p.totalScore + earned,
-          };
-        })
-      );
-
       if (currentRound >= totalRounds) {
         sound.playVictory();
         setPhase('scoreboard');
@@ -497,9 +524,9 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen school-desk-bg text-amber-100 flex flex-col font-sans select-none">
-      {/* Top Bar with Brand, Name Profile, Room Code, and Quick Actions */}
-      <header className="w-full max-w-5xl mx-auto flex items-center justify-between gap-3 px-3 sm:px-6 py-2.5 border-b border-amber-900/60 bg-black/45 backdrop-blur-md">
+    <div className={`min-h-screen ${bgThemeClass} text-amber-100 flex flex-col font-sans select-none transition-colors duration-500`}>
+      {/* Top Bar with Brand, Name Profile, Room Code, Theme Switcher, and Quick Actions */}
+      <header className="w-full max-w-5xl mx-auto flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-6 py-2.5 border-b border-amber-900/60 bg-black/45 backdrop-blur-md">
         {/* Brand */}
         <div
           onClick={() => setPhase('lobby')}
@@ -541,25 +568,78 @@ export default function App() {
         )}
 
         {/* Right Controls */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {/* Background Color / Theme Palette Switcher */}
+          <div className="flex items-center gap-0.5 sm:gap-1 p-0.5 sm:p-1 bg-black/60 border border-amber-800/60 rounded-xl" title="ব্যাকগ্রাউন্ড রঙ পরিবর্তন করুন">
+            <Palette className="w-3.5 h-3.5 text-amber-300 ml-0.5 hidden xs:inline" />
+            <button
+              type="button"
+              onClick={() => handleSetBgTheme('wood')}
+              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-all ${
+                bgTheme === 'wood'
+                  ? 'bg-amber-600 text-slate-950 shadow'
+                  : 'text-amber-200/70 hover:text-amber-100'
+              }`}
+              title="সেগুন কাঠ (Teak Wood)"
+            >
+              🪵 কাঠ
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSetBgTheme('green')}
+              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-all ${
+                bgTheme === 'green'
+                  ? 'bg-emerald-600 text-white shadow'
+                  : 'text-emerald-200/70 hover:text-emerald-100'
+              }`}
+              title="সবুজ ব্ল্যাকবোর্ড (Green Chalkboard)"
+            >
+              🌿 সবুজ
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSetBgTheme('navy')}
+              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-all ${
+                bgTheme === 'navy'
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'text-blue-200/70 hover:text-blue-100'
+              }`}
+              title="নীল কালির বোর্ড (Royal Ink Navy)"
+            >
+              🖋️ নীল
+            </button>
+            <button
+              type="button"
+              onClick={() => handleSetBgTheme('mahogany')}
+              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-all ${
+                bgTheme === 'mahogany'
+                  ? 'bg-rose-800 text-white shadow'
+                  : 'text-rose-200/70 hover:text-rose-100'
+              }`}
+              title="মেহগনি ডেস্ক (Mahogany Desk)"
+            >
+              🏫 মেহগনি
+            </button>
+          </div>
+
           {/* Custom Name Profile Button */}
           <button
             onClick={() => setIsProfileModalOpen(true)}
-            className="px-2.5 py-1.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 rounded-lg text-xs font-bangla-hand font-bold text-amber-200 transition-colors flex items-center gap-1.5 shadow"
+            className="px-2 py-1.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 rounded-lg text-xs font-bangla-hand font-bold text-amber-200 transition-colors flex items-center gap-1 shadow"
             title="আপনার নাম ও প্রতীক পরিবর্তন করুন"
           >
             <span>{playerEmoji}</span>
-            <span className="max-w-[85px] sm:max-w-[120px] truncate">{playerName}</span>
+            <span className="max-w-[75px] sm:max-w-[110px] truncate hidden sm:inline">{playerName}</span>
           </button>
 
           {/* Open Room Hub Button */}
           <button
             onClick={() => setIsRoomHubOpen(true)}
-            className="px-2.5 py-1.5 bg-blue-900/70 hover:bg-blue-800 border border-blue-500/60 rounded-lg text-xs font-serif text-blue-200 transition-colors flex items-center gap-1.5 shadow"
+            className="px-2 py-1.5 bg-blue-900/70 hover:bg-blue-800 border border-blue-500/60 rounded-lg text-xs font-serif text-blue-200 transition-colors flex items-center gap-1 shadow"
             title="অনলাইন রুম ও র্যান্ডম ৪ জন ম্যাচমেকিং"
           >
             <Globe className="w-3.5 h-3.5 text-blue-300" />
-            <span className="hidden sm:inline font-bold">অনলাইন রুম</span>
+            <span className="hidden md:inline font-bold">অনলাইন</span>
           </button>
 
           {/* Rules Button */}
@@ -585,6 +665,19 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      {/* Floating Error Toast Notification */}
+      {errorMessage && (
+        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-rose-900 border-2 border-rose-500 text-rose-100 rounded-xl shadow-2xl text-xs font-bangla-hand flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
+          <span>⚠️ {errorMessage}</span>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="text-rose-300 hover:text-white font-bold ml-1 text-sm leading-none"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Main Game Surface */}
       <main className="flex-1 w-full max-w-5xl mx-auto px-3 sm:px-6 py-4 flex flex-col items-center justify-center">
@@ -728,6 +821,7 @@ export default function App() {
             accusedPlayerId={accusedPlayerId}
             isCorrectGuess={isCorrectGuess}
             onNextRound={handleNextRound}
+            onOpenScoreKhata={() => setIsScoreDrawerOpen(true)}
             currentRound={currentRound}
             totalRounds={totalRounds}
             isPassAndPlay={gameMode === 'passAndPlay'}

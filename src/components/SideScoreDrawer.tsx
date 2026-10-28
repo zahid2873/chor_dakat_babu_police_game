@@ -69,67 +69,86 @@ export const SideScoreDrawer: React.FC<SideScoreDrawerProps> = ({
           </div>
 
           {/* Scores Table */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs sm:text-sm border-collapse font-serif">
-              <thead>
-                <tr className="border-b-2 border-blue-900 text-blue-950 font-bold">
-                  <th className="py-2 px-2.5 border-r border-blue-300">নাম</th>
-                  {Array.from({ length: currentRound }).map((_, idx) => (
-                    <th key={idx} className="py-2 px-2 border-r border-blue-300 text-center font-mono">
-                      রাঃ {idx + 1}
-                    </th>
-                  ))}
-                  <th className="py-2 px-2.5 text-right font-black text-blue-900 font-mono">
-                    মোট
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {players.map((player) => {
-                  const isTop = player.totalScore === maxScore && maxScore > 0;
-
-                  return (
-                    <tr
-                      key={player.id}
-                      className="border-b border-blue-200/80 hover:bg-blue-50/40 transition-colors"
-                    >
-                      <td className="py-2.5 px-2.5 border-r border-blue-300 font-bold flex items-center gap-1.5">
-                        <span>{player.avatarEmoji}</span>
-                        <span>{player.name}</span>
-                        {isTop && (
-                          <span className="text-[10px] bg-amber-300 text-amber-950 px-1 rounded font-mono font-bold">
-                            👑
-                          </span>
-                        )}
-                      </td>
-
-                      {Array.from({ length: currentRound }).map((_, rIdx) => {
-                        const score = player.scoreHistory[rIdx] ?? '-';
-                        return (
-                          <td
-                            key={rIdx}
-                            className="py-2.5 px-2 border-r border-blue-300 text-center font-mono font-bold text-blue-900"
-                          >
-                            {score}
-                          </td>
-                        );
-                      })}
-
-                      <td className="py-2.5 px-2.5 text-right font-mono font-black text-blue-950">
-                        <span
-                          className={`inline-block px-1.5 py-0.2 ${
-                            isTop ? 'pen-stamp-circle bg-amber-100 text-amber-950 font-bold' : ''
-                          }`}
-                        >
-                          {player.totalScore}
-                        </span>
-                      </td>
+          {(() => {
+            const displayRoundsCount = Math.max(1, currentRound, ...players.map((p) => p.scoreHistory.length));
+            return (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs sm:text-sm border-collapse font-serif">
+                  <thead>
+                    <tr className="border-b-2 border-blue-900 text-blue-950 font-bold">
+                      <th className="py-2 px-2.5 border-r border-blue-300">নাম</th>
+                      {Array.from({ length: displayRoundsCount }).map((_, idx) => (
+                        <th key={idx} className="py-2 px-2 border-r border-blue-300 text-center font-mono">
+                          রাউন্ড {idx + 1}
+                        </th>
+                      ))}
+                      <th className="py-2 px-2.5 text-right font-black text-blue-900 font-mono">
+                        মোট স্কোর
+                      </th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody>
+                    {players.map((player) => {
+                      const isTop = player.totalScore === maxScore && maxScore > 0;
+
+                      return (
+                        <tr
+                          key={player.id}
+                          className="border-b border-blue-200/80 hover:bg-blue-50/40 transition-colors"
+                        >
+                          <td className="py-2.5 px-2.5 border-r border-blue-300 font-bold flex items-center gap-1.5">
+                            <span>{player.avatarEmoji}</span>
+                            <span className="truncate max-w-[90px] sm:max-w-none">{player.name}</span>
+                            {isTop && (
+                              <span className="text-[10px] bg-amber-300 text-amber-950 px-1 rounded font-mono font-bold">
+                                👑
+                              </span>
+                            )}
+                          </td>
+
+                          {Array.from({ length: displayRoundsCount }).map((_, rIdx) => {
+                            const score = player.scoreHistory[rIdx];
+                            const isLatestRecorded = rIdx === player.scoreHistory.length - 1 && score !== undefined;
+
+                            return (
+                              <td
+                                key={rIdx}
+                                className={`py-2.5 px-2 border-r border-blue-300 text-center font-mono font-bold ${
+                                  isLatestRecorded
+                                    ? 'text-blue-700 bg-blue-100/50'
+                                    : score !== undefined
+                                    ? 'text-blue-950'
+                                    : 'text-slate-400 font-normal italic'
+                                }`}
+                              >
+                                {score !== undefined ? (
+                                  <span className={isLatestRecorded ? 'underline decoration-blue-400 font-black' : ''}>
+                                    {score}
+                                  </span>
+                                ) : (
+                                  <span className="text-[10px]">—</span>
+                                )}
+                              </td>
+                            );
+                          })}
+
+                          <td className="py-2.5 px-2.5 text-right font-mono font-black text-blue-950">
+                            <span
+                              className={`inline-block px-1.5 py-0.2 ${
+                                isTop ? 'pen-stamp-circle bg-amber-100 text-amber-950 font-bold' : ''
+                              }`}
+                            >
+                              {player.totalScore}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Footer */}

@@ -16,6 +16,7 @@ interface FourPlayerTableProps {
   accusedPlayerId: string | null;
   isCorrectGuess: boolean;
   onNextRound: () => void;
+  onOpenScoreKhata?: () => void;
   currentRound: number;
   totalRounds: number;
   isPassAndPlay?: boolean;
@@ -33,6 +34,7 @@ export const FourPlayerTable: React.FC<FourPlayerTableProps> = ({
   accusedPlayerId,
   isCorrectGuess,
   onNextRound,
+  onOpenScoreKhata,
   currentRound,
   totalRounds,
   isPassAndPlay = false,
@@ -56,7 +58,10 @@ export const FourPlayerTable: React.FC<FourPlayerTableProps> = ({
     .map((p) => p.id);
 
   // Render Seat Chit
-  const renderSeatChit = (player: PaperPlayer) => {
+  const renderSeatChit = (
+    player: PaperPlayer,
+    seatPosition: 'top' | 'left' | 'right' | 'bottom'
+  ) => {
     const roleDef = ROLE_DEFINITIONS[player.role];
 
     // CRITICAL REQUIREMENT:
@@ -79,9 +84,27 @@ export const FourPlayerTable: React.FC<FourPlayerTableProps> = ({
       <div className="flex flex-col items-center gap-1.5 relative group">
         {/* Dialogue Bubble for suspects during interrogation */}
         {player.currentDialogue && roundPhase === 'interrogation' && suspectIds.includes(player.id) && (
-          <div className="absolute -top-14 z-30 max-w-[180px] sm:max-w-[220px] bg-white text-slate-900 px-3 py-1.5 rounded-xl shadow-xl border-2 border-slate-300 text-[11px] font-bangla-hand leading-tight animate-bounce">
-            <span className="font-bold italic">"{player.currentDialogue}"</span>
-            <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white rotate-45 border-b-2 border-r-2 border-slate-300" />
+          <div
+            className={`absolute z-30 w-max max-w-[210px] sm:max-w-[280px] bg-white text-slate-900 px-3.5 py-1.5 rounded-xl shadow-2xl border-2 border-slate-300 text-[11px] sm:text-xs font-bangla-hand leading-tight animate-bounce text-center ${
+              seatPosition === 'top'
+                ? '-top-11 sm:-top-12 left-1/2 -translate-x-1/2'
+                : seatPosition === 'left'
+                ? '-top-11 sm:-top-12 left-0 sm:left-2'
+                : seatPosition === 'right'
+                ? '-top-11 sm:-top-12 right-0 sm:right-2'
+                : '-top-11 sm:-top-12 left-1/2 -translate-x-1/2'
+            }`}
+          >
+            <span className="font-bold italic select-none">"{player.currentDialogue}"</span>
+            <div
+              className={`absolute -bottom-1.5 w-3 h-3 bg-white rotate-45 border-b-2 border-r-2 border-slate-300 ${
+                seatPosition === 'left'
+                  ? 'left-8'
+                  : seatPosition === 'right'
+                  ? 'right-8'
+                  : 'left-1/2 -translate-x-1/2'
+              }`}
+            />
           </div>
         )}
 
@@ -198,15 +221,15 @@ export const FourPlayerTable: React.FC<FourPlayerTableProps> = ({
         </div>
 
         {/* SIDE 1: TOP PLAYER (North) */}
-        <div className="relative z-10 flex justify-center">
-          {renderSeatChit(topPlayer)}
+        <div className="relative z-10 flex justify-center mt-4 sm:mt-6 mb-1">
+          {renderSeatChit(topPlayer, 'top')}
         </div>
 
         {/* MIDDLE ROW: LEFT PLAYER · CENTER TABLE ARENA · RIGHT PLAYER */}
         <div className="relative z-10 flex items-center justify-between gap-2 sm:gap-4 my-auto">
           {/* Left Player */}
           <div className="shrink-0">
-            {renderSeatChit(leftPlayer)}
+            {renderSeatChit(leftPlayer, 'left')}
           </div>
 
           {/* CENTER TABLE ACTION ARENA */}
@@ -304,29 +327,50 @@ export const FourPlayerTable: React.FC<FourPlayerTableProps> = ({
                     : `পুলিশ ০ পেলেন! অপরাধীদের পয়েন্ট সুরক্ষিত রইল।`}
                 </div>
 
-                <button
-                  onClick={() => {
-                    sound.playPenScratch();
-                    onNextRound();
-                  }}
-                  className="py-2 px-5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs shadow-md transition-all inline-flex items-center gap-1.5"
-                >
-                  <span>স্কোর খাতায় তুলুন ও পরবর্তী রাউন্ড</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
+                {/* Automatic Khata Score Addition Badge */}
+                <div className="py-1 px-2.5 bg-emerald-950/70 border border-emerald-500/60 rounded-lg text-[11px] font-bangla-hand text-emerald-300 flex items-center justify-center gap-1.5 shadow-inner">
+                  <span>📓 রাউন্ড {currentRound}-এর পয়েন্ট স্বয়ংক্রিয়ভাবে খাতায় যোগ হয়েছে!</span>
+                </div>
+
+                <div className="flex items-center justify-center gap-2 pt-1">
+                  {onOpenScoreKhata && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        sound.playPaperRustle();
+                        onOpenScoreKhata();
+                      }}
+                      className="py-1.5 px-3 bg-amber-900/90 hover:bg-amber-800 text-amber-200 border border-amber-600 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1"
+                    >
+                      <span>খাতা দেখুন 📓</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sound.playChitDrop();
+                      onNextRound();
+                    }}
+                    className="py-1.5 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs shadow-md transition-all inline-flex items-center gap-1.5"
+                  >
+                    <span>পরবর্তী রাউন্ড শুরু করুন</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             )}
           </div>
 
           {/* Right Player */}
           <div className="shrink-0">
-            {renderSeatChit(rightPlayer)}
+            {renderSeatChit(rightPlayer, 'right')}
           </div>
         </div>
 
         {/* SIDE 4: BOTTOM PLAYER (South) */}
-        <div className="relative z-10 flex justify-center">
-          {renderSeatChit(bottomPlayer)}
+        <div className="relative z-10 flex justify-center mb-1">
+          {renderSeatChit(bottomPlayer, 'bottom')}
         </div>
       </div>
     </div>
