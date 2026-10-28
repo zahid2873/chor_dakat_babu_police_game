@@ -163,75 +163,88 @@ export default function App() {
   const wsRef = useRef<WebSocket | null>(null);
 
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}`;
-    const ws = new WebSocket(wsUrl);
+    let ws: WebSocket | null = null;
+    try {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}`;
+      ws = new WebSocket(wsUrl);
 
-    ws.onopen = () => {
-      const urlParams = new URLSearchParams(window.location.search);
-      const roomParam = urlParams.get('room');
-      if (roomParam) {
-        ws.send(
-          JSON.stringify({
-            type: 'JOIN_ROOM',
-            roomId: roomParam,
-            player: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
-          })
-        );
-      }
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'ROOM_STATE' && data.room) {
-          const room = data.room;
-          setActiveRoomId(room.id);
-          setActiveRoomName(room.name);
-          setTotalRounds(room.totalRounds);
-          setCurrentRound(room.currentRound);
-          setRoundPhase(room.roundPhase === 'resolved' ? 'resolved' : 'interrogation');
-          setTargetRoleToCatch(room.targetRoleToCatch);
-          setAccusedPlayerId(room.accusedPlayerId);
-          setIsCorrectGuess(room.isCorrectGuess);
-
-          setPlayers(
-            room.players.map((rp: any) => ({
-              id: rp.id,
-              name: rp.name,
-              isBot: rp.isBot,
-              avatarEmoji: rp.avatarEmoji,
-              role: rp.role,
-              chitIndex: rp.seatIndex,
-              hasSeenChit: true,
-              currentReaction: rp.currentReaction,
-              currentDialogue: rp.currentDialogue,
-              scoreHistory: rp.scoreHistory || [],
-              totalScore: rp.totalScore || 0,
-            }))
+      ws.onopen = () => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const roomParam = urlParams.get('room');
+        if (roomParam) {
+          ws?.send(
+            JSON.stringify({
+              type: 'JOIN_ROOM',
+              roomId: roomParam,
+              player: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
+            })
           );
-
-          if (room.status === 'playing') {
-            setPhase('playing');
-            setIsRoomHubOpen(false);
-          } else if (room.status === 'finished') {
-            setPhase('scoreboard');
-          }
-        } else if (data.type === 'MATCHMAKING_STATUS') {
-          setIsMatchmakingActive(true);
-          setMatchmakingWaitingCount(data.waitingCount || 1);
-        } else if (data.type === 'ERROR') {
-          setErrorMessage(data.message);
-          setTimeout(() => setErrorMessage(null), 4000);
         }
-      } catch (err) {
-        console.error('WS Error:', err);
-      }
-    };
+      };
 
-    wsRef.current = ws;
+      ws.onerror = () => {
+        // Silently handle WebSocket absence on static hosts like Netlify
+        console.warn('Real-time server not connected. Local & Bot play active.');
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === 'ROOM_STATE' && data.room) {
+            const room = data.room;
+            setActiveRoomId(room.id);
+            setActiveRoomName(room.name);
+            setTotalRounds(room.totalRounds);
+            setCurrentRound(room.currentRound);
+            setRoundPhase(room.roundPhase === 'resolved' ? 'resolved' : 'interrogation');
+            setTargetRoleToCatch(room.targetRoleToCatch);
+            setAccusedPlayerId(room.accusedPlayerId);
+            setIsCorrectGuess(room.isCorrectGuess);
+
+            setPlayers(
+              room.players.map((rp: any) => ({
+                id: rp.id,
+                name: rp.name,
+                isBot: rp.isBot,
+                avatarEmoji: rp.avatarEmoji,
+                role: rp.role,
+                chitIndex: rp.seatIndex,
+                hasSeenChit: true,
+                currentReaction: rp.currentReaction,
+                currentDialogue: rp.currentDialogue,
+                scoreHistory: rp.scoreHistory || [],
+                totalScore: rp.totalScore || 0,
+              }))
+            );
+
+            if (room.status === 'playing') {
+              setPhase('playing');
+              setIsRoomHubOpen(false);
+            } else if (room.status === 'finished') {
+              setPhase('scoreboard');
+            }
+          } else if (data.type === 'MATCHMAKING_STATUS') {
+            setIsMatchmakingActive(true);
+            setMatchmakingWaitingCount(data.waitingCount || 1);
+          } else if (data.type === 'ERROR') {
+            setErrorMessage(data.message);
+            setTimeout(() => setErrorMessage(null), 4000);
+          }
+        } catch (err) {
+          console.error('WS Message Error:', err);
+        }
+      };
+
+      wsRef.current = ws;
+    } catch (err) {
+      console.warn('WebSocket could not be initialized:', err);
+    }
+
     return () => {
-      ws.close();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
     };
   }, [playerId, playerName, playerEmoji]);
 
