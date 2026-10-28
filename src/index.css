@@ -1,0 +1,72 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Anek Bangla', 'Hind Siliguri', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --font-handwriting: 'Kalam', 'Caveat', 'Anek Bangla', cursive, sans-serif;
+}
+
+/* Vintage Ruled Notebook Paper pattern */
+.notebook-ruled-page {
+  background-color: #faf6eb;
+  background-image:
+    linear-gradient(90deg, transparent 48px, #f87171 49px, transparent 50px),
+    linear-gradient(#dbeafe 1px, transparent 1px);
+  background-size: 100% 100%, 100% 28px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4), 0 8px 10px -6px rgba(0, 0, 0, 0.3);
+}
+
+/* Darker wooden school desk background */
+.school-desk-bg {
+  background-color: #2b1d0c;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 0),
+                    radial-gradient(rgba(0, 0, 0, 0.3) 1px, transparent 0);
+  background-position: 0 0, 25px 25px;
+  background-size: 50px 50px;
+}
+
+/* Blue Ballpoint Ink text style */
+.ink-blue-text {
+  color: #1d4ed8;
+  text-shadow: 0.5px 0.5px 1px rgba(30, 64, 175, 0.3);
+}
+
+/* Ballpoint pen stamp circle effect */
+.pen-stamp-circle {
+  border: 2px solid #1e40af;
+  border-radius: 9999px;
+  transform: rotate(-3deg);
+  box-shadow: inset 0 0 4px rgba(30, 64, 175, 0.2);
+}
+
+/* Folded paper chit crease effect */
+.paper-chit-crease {
+  background: linear-gradient(135deg, #fdfbf7 0%, #f4ede0 50%, #eae0ce 100%);
+  box-shadow: 2px 4px 8px rgba(0, 0, 0, 0.25), inset 0 1px 1px rgba(255, 255, 255, 0.8);
+  border: 1px dashed rgba(180, 160, 130, 0.6);
+}
+
+/* Torn paper edge simulation */
+.torn-paper-edge {
+  clip-path: polygon(
+    0% 0%, 5% 2px, 10% 0%, 15% 3px, 20% 0%, 25% 2px, 30% 0%, 35% 3px,
+    40% 0%, 45% 2px, 50% 0%, 55% 3px, 60% 0%, 65% 2px, 70% 0%, 75% 3px,
+    80% 0%, 85% 2px, 90% 0%, 95% 3px, 100% 0%,
+    100% 100%, 95% 98px, 90% 100%, 85% 97px, 80% 100%, 75% 98px, 70% 100%,
+    65% 97px, 60% 100%, 55% 98px, 50% 100%, 45% 97px, 40% 100%, 35% 98px,
+    30% 100%, 25% 97px, 20% 100%, 15% 98px, 10% 100%, 5% 97px, 0% 100%
+  );
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f1ede1;
+}
+::-webkit-scrollbar-thumb {
+  background: #b8a892;
+  border-radius: 9999px;
+}

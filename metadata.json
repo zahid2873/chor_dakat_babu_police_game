@@ -1,0 +1,6 @@
+{
+  "name": "Chor Police Dakat Babu - Money Mode",
+  "description": "Authentic digital four-player card game with secret roles, detective deduction, and virtual Taka money transfers based on the Version C GDD.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
