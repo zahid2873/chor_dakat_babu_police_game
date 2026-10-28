@@ -8,6 +8,7 @@ import { NotebookScoreboard } from './components/NotebookScoreboard';
 import { PlayerProfileModal } from './components/PlayerProfileModal';
 import { PassAndPlaySetupModal } from './components/PassAndPlaySetupModal';
 import { OnlineRoomHub } from './components/OnlineRoomHub';
+import { RoomConnection } from './utils/roomConnection';
 import {
   Volume2,
   VolumeX,
@@ -159,34 +160,25 @@ export default function App() {
   const [isBotPoliceThinking, setIsBotPoliceThinking] = useState(false);
   const [botPoliceThoughtText, setBotPoliceThoughtText] = useState<string | null>(null);
 
-  // WebSocket
-  const wsRef = useRef<WebSocket | null>(null);
+  // Online room connection (HTTP polling via Netlify Functions)
+  const wsRef = useRef<RoomConnection | null>(null);
 
   useEffect(() => {
-    let ws: WebSocket | null = null;
+    let ws: RoomConnection | null = null;
     try {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}`;
-      ws = new WebSocket(wsUrl);
+      ws = new RoomConnection(playerId);
 
-      ws.onopen = () => {
-        const urlParams = new URLSearchParams(window.location.search);
-        const roomParam = urlParams.get('room');
-        if (roomParam) {
-          ws?.send(
-            JSON.stringify({
-              type: 'JOIN_ROOM',
-              roomId: roomParam,
-              player: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
-            })
-          );
-        }
-      };
-
-      ws.onerror = () => {
-        // Silently handle WebSocket absence on static hosts like Netlify
-        console.warn('Real-time server not connected. Local & Bot play active.');
-      };
+      const urlParams = new URLSearchParams(window.location.search);
+      const roomParam = urlParams.get('room');
+      if (roomParam) {
+        ws.send(
+          JSON.stringify({
+            type: 'JOIN_ROOM',
+            roomId: roomParam,
+            player: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
+          })
+        );
+      }
 
       ws.onmessage = (event) => {
         try {
@@ -238,15 +230,13 @@ export default function App() {
 
       wsRef.current = ws;
     } catch (err) {
-      console.warn('WebSocket could not be initialized:', err);
+      console.warn('Room connection could not be initialized:', err);
     }
 
     return () => {
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.close();
-      }
+      ws?.close();
     };
-  }, [playerId, playerName, playerEmoji]);
+  }, [playerId]);
 
   // Profile & Names Save
   const handleSaveProfile = (
@@ -302,6 +292,7 @@ export default function App() {
   // Start Offline Match (1 Human + 3 Bots)
   const handleStartBotMatch = () => {
     setGameMode('vsBots');
+    wsRef.current?.leaveRoom();
     setActiveRoomId(null);
     setCurrentRound(1);
     sound.playChitDrop();
@@ -368,6 +359,7 @@ export default function App() {
   // Start Pass & Play Match (4 Humans on 1 Device)
   const handleStartPassAndPlay = (customNames: string[], rounds: number) => {
     setGameMode('passAndPlay');
+    wsRef.current?.leaveRoom();
     setActiveRoomId(null);
     setTotalRounds(rounds);
     setCurrentRound(1);
@@ -476,7 +468,7 @@ export default function App() {
 
   // Accuse Suspect
   const handleExecuteAccusation = (suspectPlayerId: string, currentPlayersList = players) => {
-    if (activeRoomId && wsRef.current?.readyState === WebSocket.OPEN) {
+    if (activeRoomId && wsRef.current?.readyState === RoomConnection.OPEN) {
       wsRef.current.send(
         JSON.stringify({ type: 'ACCUSE_SUSPECT', roomId: activeRoomId, suspectPlayerId })
       );
@@ -517,7 +509,7 @@ export default function App() {
   // Next Round
   const handleNextRound = () => {
     sound.playPenScratch();
-    if (activeRoomId && wsRef.current?.readyState === WebSocket.OPEN) {
+    if (activeRoomId && wsRef.current?.readyState === RoomConnection.OPEN) {
       wsRef.current.send(
         JSON.stringify({ type: 'NEXT_ROUND', roomId: activeRoomId })
       );
@@ -534,7 +526,7 @@ export default function App() {
 
   // Room Hub actions
   const handleCreateRoom = (roomName: string, rounds: number, fillBots: boolean) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    if (wsRef.current?.readyState === RoomConnection.OPEN) {
       wsRef.current.send(
         JSON.stringify({
           type: 'CREATE_ROOM',
@@ -549,7 +541,7 @@ export default function App() {
   };
 
   const handleJoinRoom = (roomId: string) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    if (wsRef.current?.readyState === RoomConnection.OPEN) {
       wsRef.current.send(
         JSON.stringify({
           type: 'JOIN_ROOM',
@@ -561,7 +553,7 @@ export default function App() {
   };
 
   const handleJoinMatchmaking = () => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
+    if (wsRef.current?.readyState === RoomConnection.OPEN) {
       wsRef.current.send(
         JSON.stringify({
           type: 'JOIN_MATCHMAKING',
@@ -931,7 +923,10 @@ export default function App() {
         onJoinMatchmaking={handleJoinMatchmaking}
         matchmakingWaitingCount={matchmakingWaitingCount}
         isMatchmakingActive={isMatchmakingActive}
-        onCancelMatchmaking={() => setIsMatchmakingActive(false)}
+        onCancelMatchmaking={() => {
+          wsRef.current?.send(JSON.stringify({ type: 'LEAVE_MATCHMAKING', playerId }));
+          setIsMatchmakingActive(false);
+        }}
       />
 
       {/* Player Profile & Names Modal */}
