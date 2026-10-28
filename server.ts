@@ -55,7 +55,7 @@ const clientRooms = new Map<string, string>(); // socketId -> roomId
 const matchmakingQueue: { playerId: string; name: string; avatarEmoji: string; ws: WebSocket }[] = [];
 
 // Seed default AI Bot players
-const BOT_NAMES = ['রহিম (বট)', 'করিম (বট)', 'ফাতেমা (বট)', 'সুজন (বট)'];
+const BOT_NAMES = ['X', 'Y', 'Z', 'W'];
 const BOT_EMOJIS = ['👦', '🧔', '👧', '🧑'];
 
 const BLUFF_REACTIONS = [

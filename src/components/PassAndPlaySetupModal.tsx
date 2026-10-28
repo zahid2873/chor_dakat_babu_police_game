@@ -15,7 +15,7 @@ export const PassAndPlaySetupModal: React.FC<PassAndPlaySetupModalProps> = ({
   isOpen,
   onClose,
   onStartPassAndPlay,
-  initialNames = ['মাহদী', 'তানভীর', 'সাকিব', 'রাকিব'],
+  initialNames = ['আপনি', 'X', 'Y', 'Z'],
 }) => {
   const [names, setNames] = useState<string[]>(initialNames);
   const [rounds, setRounds] = useState(5);

@@ -54,6 +54,15 @@ export default function App() {
   const [playerEmoji, setPlayerEmoji] = useState(() => {
     return localStorage.getItem('cpdb_player_emoji') || '🧑‍🎓';
   });
+  const [nameX, setNameX] = useState(() => {
+    return localStorage.getItem('cpdb_player_x') || 'X';
+  });
+  const [nameY, setNameY] = useState(() => {
+    return localStorage.getItem('cpdb_player_y') || 'Y';
+  });
+  const [nameZ, setNameZ] = useState(() => {
+    return localStorage.getItem('cpdb_player_z') || 'Z';
+  });
   const [playerId] = useState(() => {
     let id = localStorage.getItem('cpdb_player_id');
     if (!id) {
@@ -106,7 +115,7 @@ export default function App() {
     },
     {
       id: 'bot-1',
-      name: 'রহিম (বট)',
+      name: nameX,
       isBot: true,
       avatarEmoji: '👦',
       role: 'police',
@@ -119,7 +128,7 @@ export default function App() {
     },
     {
       id: 'bot-2',
-      name: 'করিম (বট)',
+      name: nameY,
       isBot: true,
       avatarEmoji: '🧔',
       role: 'dakat',
@@ -132,7 +141,7 @@ export default function App() {
     },
     {
       id: 'bot-3',
-      name: 'ফাতেমা (বট)',
+      name: nameZ,
       isBot: true,
       avatarEmoji: '👧',
       role: 'chor',
@@ -226,15 +235,41 @@ export default function App() {
     };
   }, [playerId, playerName, playerEmoji]);
 
-  // Profile Save
-  const handleSaveProfile = (newName: string, newEmoji: string) => {
+  // Profile & Names Save
+  const handleSaveProfile = (
+    newName: string,
+    newEmoji: string,
+    newX: string,
+    newY: string,
+    newZ: string
+  ) => {
     setPlayerName(newName);
     setPlayerEmoji(newEmoji);
+    setNameX(newX);
+    setNameY(newY);
+    setNameZ(newZ);
     localStorage.setItem('cpdb_player_name', newName);
     localStorage.setItem('cpdb_player_emoji', newEmoji);
+    localStorage.setItem('cpdb_player_x', newX);
+    localStorage.setItem('cpdb_player_y', newY);
+    localStorage.setItem('cpdb_player_z', newZ);
 
     setPlayers((prev) =>
-      prev.map((p) => (p.id === playerId ? { ...p, name: newName, avatarEmoji: newEmoji } : p))
+      prev.map((p, idx) => {
+        if (p.id === playerId || idx === 0) {
+          return { ...p, name: newName, avatarEmoji: newEmoji };
+        }
+        if (idx === 1 || p.id === 'bot-1') {
+          return { ...p, name: newX };
+        }
+        if (idx === 2 || p.id === 'bot-2') {
+          return { ...p, name: newY };
+        }
+        if (idx === 3 || p.id === 'bot-3') {
+          return { ...p, name: newZ };
+        }
+        return p;
+      })
     );
   };
 
@@ -274,7 +309,7 @@ export default function App() {
       },
       {
         id: 'bot-1',
-        name: 'রহিম (বট)',
+        name: nameX,
         isBot: true,
         avatarEmoji: '👦',
         role: 'police',
@@ -287,7 +322,7 @@ export default function App() {
       },
       {
         id: 'bot-2',
-        name: 'করিম (বট)',
+        name: nameY,
         isBot: true,
         avatarEmoji: '🧔',
         role: 'dakat',
@@ -300,7 +335,7 @@ export default function App() {
       },
       {
         id: 'bot-3',
-        name: 'ফাতেমা (বট)',
+        name: nameZ,
         isBot: true,
         avatarEmoji: '👧',
         role: 'chor',
@@ -625,11 +660,12 @@ export default function App() {
           {/* Custom Name Profile Button */}
           <button
             onClick={() => setIsProfileModalOpen(true)}
-            className="px-2 py-1.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 rounded-lg text-xs font-bangla-hand font-bold text-amber-200 transition-colors flex items-center gap-1 shadow"
-            title="আপনার নাম ও প্রতীক পরিবর্তন করুন"
+            className="px-2 sm:px-2.5 py-1.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 rounded-lg text-xs font-bangla-hand font-bold text-amber-200 transition-colors flex items-center gap-1.5 shadow"
+            title="খেলোয়াড়দের নাম পরিবর্তন করুন (আপনি, X, Y, Z)"
           >
             <span>{playerEmoji}</span>
-            <span className="max-w-[75px] sm:max-w-[110px] truncate hidden sm:inline">{playerName}</span>
+            <span className="max-w-[70px] sm:max-w-[100px] truncate">{playerName}</span>
+            <span className="text-[10px] text-amber-400 font-mono hidden md:inline">| {nameX}, {nameY}, {nameZ}</span>
           </button>
 
           {/* Open Room Hub Button */}
@@ -868,7 +904,7 @@ export default function App() {
         isOpen={isPassAndPlayModalOpen}
         onClose={() => setIsPassAndPlayModalOpen(false)}
         onStartPassAndPlay={handleStartPassAndPlay}
-        initialNames={[playerName, 'তানভীর', 'সাকিব', 'রাকিব']}
+        initialNames={[playerName, nameX, nameY, nameZ]}
       />
 
       {/* Online Room Hub Modal */}
@@ -885,12 +921,15 @@ export default function App() {
         onCancelMatchmaking={() => setIsMatchmakingActive(false)}
       />
 
-      {/* Player Profile Modal */}
+      {/* Player Profile & Names Modal */}
       <PlayerProfileModal
         isOpen={isProfileModalOpen}
         onClose={() => setIsProfileModalOpen(false)}
         currentName={playerName}
         currentEmoji={playerEmoji}
+        nameX={nameX}
+        nameY={nameY}
+        nameZ={nameZ}
         onSaveProfile={handleSaveProfile}
       />
 
