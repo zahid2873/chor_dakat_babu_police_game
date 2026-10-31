@@ -1,4 +1,4 @@
-import { pgTable, text, jsonb, boolean, bigint } from "drizzle-orm/pg-core";
+import { pgTable, text, jsonb, boolean, bigint, primaryKey } from "drizzle-orm/pg-core";
 
 export const rooms = pgTable("rooms", {
   id: text().primaryKey(),
@@ -16,3 +16,14 @@ export const matchmakingQueue = pgTable("matchmaking_queue", {
   roomId: text("room_id"),
   joinedAt: bigint("joined_at", { mode: "number" }).notNull(),
 });
+
+// Last time each player polled a room; drives online/offline badges and AFK handling
+export const roomPresence = pgTable(
+  "room_presence",
+  {
+    roomId: text("room_id").notNull(),
+    playerId: text("player_id").notNull(),
+    lastSeen: bigint("last_seen", { mode: "number" }).notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.roomId, t.playerId] })]
+);

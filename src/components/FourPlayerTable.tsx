@@ -1,35 +1,75 @@
-import React from 'react';
-import { PaperPlayer, RoleType } from '../types/game';
-import { ROLE_DEFINITIONS } from '../utils/constants';
-import { sound } from '../utils/audio';
-import { Crown, Shield, Search, CheckCircle2, XCircle, ArrowRight, HelpCircle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { GameMode, PaperPlayer, RoomReaction, RoundPhase, TargetRole } from '../types/game';
+import { QUICK_EMOJIS, QUICK_PHRASES, ROLE_DEFINITIONS, isSuspectRole, toBn } from '../utils/constants';
+import { Crown, Shield, Search, CheckCircle2, XCircle, ArrowRight, NotebookPen, LogOut, Timer } from 'lucide-react';
+import benchUrl from '../assets/images/school-bench.webp';
+
+const REACTION_SHOW_MS = 4000;
+const REACT_COOLDOWN_MS = 900;
+
+// Re-render on an interval while something on screen is counting down.
+function useNow(active: boolean, intervalMs = 500) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [active, intervalMs]);
+  return now;
+}
+
+const secondsLeft = (until: number | undefined, now: number) =>
+  until === undefined ? undefined : Math.max(0, Math.ceil((until - now) / 1000));
 
 interface FourPlayerTableProps {
   players: PaperPlayer[];
   humanPlayerId: string;
-  targetRoleToCatch: 'chor' | 'dakat';
-  onSetTargetRoleToCatch: (role: 'chor' | 'dakat') => void;
+  gameMode: GameMode;
+  targetRoleToCatch: TargetRole;
+  onSetTargetRoleToCatch: (role: TargetRole) => void;
   onAccuseSuspect: (suspectPlayerId: string) => void;
   isBotPoliceThinking: boolean;
-  botPoliceThoughtText: string | null;
-  roundPhase: 'interrogation' | 'resolved';
+  roundPhase: RoundPhase;
   accusedPlayerId: string | null;
   isCorrectGuess: boolean;
   onNextRound: () => void;
-  onOpenScoreKhata?: () => void;
+  onOpenScoreKhata: () => void;
   currentRound: number;
   totalRounds: number;
-  isPassAndPlay?: boolean;
+  // Online rooms only
+  roomName?: string;
+  /** Local-clock time the police's turn runs out */
+  turnEndsAt?: number;
+  /** Local-clock time the next round starts on its own */
+  nextRoundAt?: number;
+  wasAutoAccused?: boolean;
+  reactions?: RoomReaction[];
+  serverOffset?: number;
+  onReact?: (text: string) => void;
+  onLeave?: () => void;
 }
+
+type Seat = 'top' | 'left' | 'right' | 'bottom';
+
+// Mobile stacks top → left|right → action panel → bottom; sm+ is a true 4-sided table.
+const SEAT_LAYOUT: Record<Seat, string> = {
+  top: 'col-span-2 sm:col-span-3 order-1 sm:order-none justify-center',
+  left: 'order-2 sm:order-none justify-start',
+  right: 'order-3 sm:order-none justify-end',
+  bottom: 'col-span-2 sm:col-span-3 order-5 sm:order-none justify-center',
+};
+
+const TARGET_LABEL: Record<TargetRole, string> = { dakat: 'ডাকাত', chor: 'চোর' };
 
 export const FourPlayerTable: React.FC<FourPlayerTableProps> = ({
   players,
   humanPlayerId,
+  gameMode,
   targetRoleToCatch,
   onSetTargetRoleToCatch,
   onAccuseSuspect,
   isBotPoliceThinking,
-  botPoliceThoughtText,
   roundPhase,
   accusedPlayerId,
   isCorrectGuess,
@@ -37,341 +77,396 @@ export const FourPlayerTable: React.FC<FourPlayerTableProps> = ({
   onOpenScoreKhata,
   currentRound,
   totalRounds,
-  isPassAndPlay = false,
+  roomName,
+  turnEndsAt,
+  nextRoundAt,
+  wasAutoAccused = false,
+  reactions,
+  serverOffset = 0,
+  onReact,
+  onLeave,
 }) => {
-  // 4 seats in 4 cardinal directions
-  const bottomPlayer = players[0]; // South
-  const leftPlayer = players[1];   // West
-  const topPlayer = players[2];    // North
-  const rightPlayer = players[3];  // East
+  const isPassAndPlay = gameMode === 'passAndPlay';
+  const isOnlineRoom = gameMode === 'online';
+  const isResolved = roundPhase === 'resolved';
+  const now = useNow(turnEndsAt !== undefined || nextRoundAt !== undefined || !!reactions?.length);
+  const turnSecs = secondsLeft(turnEndsAt, now);
+  const nextSecs = secondsLeft(nextRoundAt, now);
+
+  // Newest live reaction per player, shown as a bubble on their seat
+  const liveReactions = new Map<string, RoomReaction>();
+  for (const r of reactions || []) {
+    if (r.at - serverOffset > now - REACTION_SHOW_MS) liveReactions.set(r.playerId, r);
+  }
+
+  // Rotate seats so this device's player always sits at the bottom
+  const selfIdx = isPassAndPlay ? 0 : Math.max(0, players.findIndex((p) => p.id === humanPlayerId));
+  const [bottomPlayer, leftPlayer, topPlayer, rightPlayer] = [0, 1, 2, 3].map((i) => players[(selfIdx + i) % 4]);
 
   const babuPlayer = players.find((p) => p.role === 'babu')!;
   const policePlayer = players.find((p) => p.role === 'police')!;
+  const accused = players.find((p) => p.id === accusedPlayerId);
 
-  // In Pass & Play: any human in the police seat controls the guess.
-  // In Bot mode: only human seat (bottom) controls the guess if human is police.
-  const isPoliceTurn = isPassAndPlay ? !policePlayer.isBot : policePlayer.id === humanPlayerId;
+  // Pass & Play: whoever holds Police taps on the shared screen. Otherwise only the police's own device.
+  const isPoliceTurn =
+    !isResolved && !policePlayer.isBot && (isPassAndPlay || policePlayer.id === humanPlayerId);
+  const isLastRound = currentRound >= totalRounds;
 
-  // Suspects: strictly Chor and Dakat
-  const suspectIds = players
-    .filter((p) => p.role === 'chor' || p.role === 'dakat')
-    .map((p) => p.id);
-
-  // Render Seat Chit
-  const renderSeatChit = (
-    player: PaperPlayer,
-    seatPosition: 'top' | 'left' | 'right' | 'bottom'
-  ) => {
-    const roleDef = ROLE_DEFINITIONS[player.role];
-
-    // CRITICAL REQUIREMENT:
-    // "you only show 2 card police and babu then who is police then he will select that whos is dakat or chor like this"
-    let isRevealed = false;
-    if (roundPhase === 'resolved') {
-      isRevealed = true; // All cards open after verdict!
-    } else if (player.role === 'babu' || player.role === 'police') {
-      isRevealed = true; // ONLY Babu and Police are shown publicly during interrogation!
-    }
-
-    const isEligibleSuspect =
-      roundPhase === 'interrogation' &&
-      suspectIds.includes(player.id) &&
-      isPoliceTurn;
-
+  const renderSeat = (player: PaperPlayer, seat: Seat) => {
+    const isSelf = !isPassAndPlay && player.id === humanPlayerId;
+    const isSuspect = isSuspectRole(player.role);
+    const isPublic = isResolved || !isSuspect;
+    // Your own folded chit is visible to you alone (bots / online)
+    const isPrivatePeek = !isPublic && isSelf && player.role !== 'hidden';
+    const isOpen = (isPublic || isPrivatePeek) && player.role !== 'hidden';
+    const roleDef = player.role !== 'hidden' ? ROLE_DEFINITIONS[player.role] : null;
+    const isEligibleSuspect = isPoliceTurn && isSuspect && !isSelf;
     const isAccused = accusedPlayerId === player.id;
+    const lastEarned = isResolved ? player.scoreHistory[player.scoreHistory.length - 1] : undefined;
+
+    const ringClass = isAccused
+      ? isCorrectGuess
+        ? 'border-emerald-600 ring-4 ring-emerald-400'
+        : 'border-rose-600 ring-4 ring-rose-400'
+      : player.role === 'babu'
+      ? 'border-emerald-500'
+      : player.role === 'police'
+      ? 'border-blue-500'
+      : 'border-amber-400';
+
+    const reaction = liveReactions.get(player.id);
+    const isOffline = player.isOnline === false;
 
     return (
-      <div className="flex flex-col items-center gap-1.5 relative group">
-        {/* Dialogue Bubble for suspects during interrogation */}
-        {player.currentDialogue && roundPhase === 'interrogation' && suspectIds.includes(player.id) && (
-          <div
-            className={`absolute z-30 w-max max-w-[210px] sm:max-w-[280px] bg-white text-slate-900 px-3.5 py-1.5 rounded-xl shadow-2xl border-2 border-slate-300 text-[11px] sm:text-xs font-bangla-hand leading-tight animate-bounce text-center ${
-              seatPosition === 'top'
-                ? '-top-11 sm:-top-12 left-1/2 -translate-x-1/2'
-                : seatPosition === 'left'
-                ? '-top-11 sm:-top-12 left-0 sm:left-2'
-                : seatPosition === 'right'
-                ? '-top-11 sm:-top-12 right-0 sm:right-2'
-                : '-top-11 sm:-top-12 left-1/2 -translate-x-1/2'
+      <div className={`flex ${SEAT_LAYOUT[seat]}`}>
+        <div className="relative flex flex-col items-center gap-1.5 max-w-[11rem] sm:max-w-[13rem]">
+          {reaction && (
+            <div
+              key={reaction.id}
+              className={`reaction-bubble ${reaction.text.length > 2 ? 'text-sm' : 'text-3xl'}`}
+              aria-live="polite"
+            >
+              {reaction.text}
+            </div>
+          )}
+          {player.currentDialogue && !isResolved && isSuspect && !isSelf && (
+            <div className="speech-bubble anim-float">“{player.currentDialogue}”</div>
+          )}
+
+          <button
+            type="button"
+            disabled={!isEligibleSuspect}
+            onClick={() => onAccuseSuspect(player.id)}
+            aria-label={
+              isEligibleSuspect
+                ? `${player.name}-কে ${TARGET_LABEL[targetRoleToCatch]} হিসেবে ধরুন`
+                : `${player.name}-এর চিরকুট`
+            }
+            className={`rounded-md transition-transform duration-200 ${
+              isEligibleSuspect
+                ? 'cursor-pointer hover:scale-105 active:scale-95 ring-4 ring-amber-400 shadow-2xl suspect-pulse'
+                : 'cursor-default'
             }`}
           >
-            <span className="font-bold italic select-none">"{player.currentDialogue}"</span>
-            <div
-              className={`absolute -bottom-1.5 w-3 h-3 bg-white rotate-45 border-b-2 border-r-2 border-slate-300 ${
-                seatPosition === 'left'
-                  ? 'left-8'
-                  : seatPosition === 'right'
-                  ? 'right-8'
-                  : 'left-1/2 -translate-x-1/2'
-              }`}
-            />
+            {!isOpen ? (
+              <div className="w-[7.5rem] sm:w-36 h-[5.5rem] sm:h-24 paper-chit-crease rounded-sm flex flex-col items-center justify-center p-2 relative">
+                <span className="text-lg" aria-hidden>📜</span>
+                <span className="text-[11px] text-blue-900/70 font-bold">গোপন চিরকুট</span>
+                {isEligibleSuspect && (
+                  <span className="text-[11px] text-amber-950 font-bold bg-amber-300 px-2 py-0.5 rounded-full mt-1 shadow">
+                    {TARGET_LABEL[targetRoleToCatch]} ঘোষণা 🎯
+                  </span>
+                )}
+              </div>
+            ) : (
+              <div
+                className={`w-[7.5rem] sm:w-40 h-28 sm:h-32 notebook-ruled-page border-2 rounded-sm p-2 flex flex-col justify-between text-center relative overflow-hidden anim-pop ${ringClass}`}
+              >
+                <div className="text-[11px] text-red-700 font-bold border-b border-blue-200 pb-0.5 truncate">
+                  {isPrivatePeek ? 'শুধু আপনি দেখছেন 🤫' : roleDef!.titleBn}
+                </div>
+                <div className="my-auto">
+                  <div className="text-2xl sm:text-3xl font-extrabold ink-blue-text">
+                    {roleDef!.emoji} {roleDef!.nameBn}
+                  </div>
+                  <div className="text-xs font-bold text-blue-900 mt-0.5 pen-stamp-circle inline-block px-2 bg-blue-50/70">
+                    {toBn(roleDef!.points)} পয়েন্ট
+                  </div>
+                </div>
+                {isAccused && (
+                  <div className={`text-[11px] font-bold ${isCorrectGuess ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {isCorrectGuess ? 'ধরা পড়েছে! 🚔' : 'ভুল আসামী!'}
+                  </div>
+                )}
+              </div>
+            )}
+          </button>
+
+          <div
+            className={`flex items-center gap-1.5 px-2.5 py-1 bg-black/80 border border-amber-700/80 rounded-full text-xs text-amber-200 shadow-lg max-w-full ${
+              isOffline ? 'opacity-60' : ''
+            }`}
+          >
+            {isOnlineRoom && !player.isBot && (
+              <span
+                className={`w-2 h-2 rounded-full shrink-0 ${isOffline ? 'bg-slate-400' : 'bg-emerald-400 shadow-[0_0_6px_rgb(52_211_153)]'}`}
+                title={isOffline ? 'অফলাইন' : 'অনলাইন'}
+                aria-label={isOffline ? 'অফলাইন' : 'অনলাইন'}
+              />
+            )}
+            <span aria-hidden>{player.avatarEmoji}</span>
+            <span className="font-bold truncate">{player.name}</span>
+            {isOnlineRoom && player.isBot && <span className="text-[10px] text-slate-400">বট</span>}
+            {isOffline && <span className="text-[10px] text-slate-300">অফলাইন</span>}
+            {isSelf && player.name !== 'আপনি' && <span className="text-[10px] text-amber-400">(আপনি)</span>}
+            <span className="text-amber-400 font-bold whitespace-nowrap">{toBn(player.totalScore)}</span>
+            {lastEarned !== undefined && (
+              <span className={`font-bold whitespace-nowrap ${lastEarned > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                +{toBn(lastEarned)}
+              </span>
+            )}
           </div>
-        )}
-
-        {/* The Paper Chit */}
-        <div
-          onClick={() => {
-            if (isEligibleSuspect) {
-              sound.playPoliceWhistle();
-              onAccuseSuspect(player.id);
-            }
-          }}
-          className={`transition-all duration-300 select-none ${
-            isEligibleSuspect
-              ? 'cursor-pointer hover:scale-105 ring-4 ring-amber-400 rounded-lg shadow-2xl'
-              : ''
-          }`}
-        >
-          {!isRevealed ? (
-            /* FOLDED PAPER CHIT (মোড়ানো গোপন চিরকুট) */
-            <div className="w-28 sm:w-36 h-20 sm:h-24 paper-chit-crease rounded-sm flex flex-col items-center justify-center p-2 relative shadow-lg">
-              <div className="absolute top-0 bottom-0 left-1/3 w-[1px] bg-amber-900/20" />
-              <div className="absolute top-0 bottom-0 right-1/3 w-[1px] bg-amber-900/20" />
-              <div className="absolute left-0 right-0 top-1/2 h-[1px] bg-amber-900/20" />
-
-              <HelpCircle className="w-4 h-4 text-amber-800/40 mb-0.5" />
-              <span className="text-[10px] font-mono text-blue-900/60 font-bold uppercase tracking-wider">
-                [গোপন চিরকুট]
-              </span>
-              <span className="text-xs font-bold text-amber-950 font-bangla-hand">
-                {player.name}
-              </span>
-
-              {isEligibleSuspect && (
-                <span className="text-[9px] text-amber-950 font-bold bg-amber-300 px-2 py-0.5 rounded-full mt-1 animate-pulse shadow">
-                  {targetRoleToCatch === 'dakat' ? 'ডাকাত' : 'চোর'} ঘোষণা করুন 🎯
-                </span>
-              )}
-            </div>
-          ) : (
-            /* UNFOLDED TORN NOTEBOOK CHIT (উন্মোচিত চিরকুট) */
-            <div
-              className={`w-32 sm:w-40 h-28 sm:h-34 notebook-ruled-page border-2 rounded-sm shadow-2xl p-2.5 flex flex-col justify-between text-center relative overflow-hidden animate-in zoom-in-95 duration-200 ${
-                isAccused
-                  ? isCorrectGuess
-                    ? 'border-emerald-600 ring-4 ring-emerald-400'
-                    : 'border-rose-600 ring-4 ring-rose-400'
-                  : player.role === 'babu'
-                  ? 'border-emerald-500'
-                  : player.role === 'police'
-                  ? 'border-blue-500'
-                  : 'border-amber-400'
-              }`}
-            >
-              <div className="text-[10px] text-red-700 font-bold border-b border-blue-200 pb-0.5 font-mono truncate">
-                {player.name}
-              </div>
-
-              <div className="my-auto">
-                <div className="text-2xl sm:text-3xl font-extrabold ink-blue-text font-bangla-hand">
-                  {roleDef.nameBn}
-                </div>
-                <div className="text-xs font-bold text-blue-900 font-mono mt-0.5 pen-stamp-circle inline-block px-2 py-0.2 bg-blue-50/70">
-                  {roleDef.points} পয়েন্ট
-                </div>
-              </div>
-
-              <div className="text-[9px] text-blue-950 font-bangla-hand font-bold truncate">
-                {roleDef.titleBn}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Seat Badge */}
-        <div className="flex items-center gap-1.5 px-3 py-1 bg-black/75 border border-amber-700/80 rounded-full text-xs font-serif text-amber-200 shadow-lg backdrop-blur-sm">
-          <span>{player.avatarEmoji}</span>
-          <span className="font-bold">{player.name}</span>
-          {player.role === 'police' && isRevealed && (
-            <span className="text-blue-400 font-mono text-[10px] font-bold">[দারোগা]</span>
-          )}
-          {player.role === 'babu' && isRevealed && (
-            <span className="text-emerald-400 font-mono text-[10px] font-bold">[বাবু]</span>
-          )}
-          <span className="text-amber-400 font-mono font-bold ml-1">
-            ({player.totalScore} পঃ)
-          </span>
         </div>
       </div>
     );
   };
 
-  return (
-    <div className="relative w-full max-w-4xl mx-auto rounded-3xl overflow-hidden border-4 border-amber-950 shadow-2xl bg-amber-950">
-      {/* Weathered Wooden School Desk Photo Background */}
-      <div
-        className="w-full aspect-[4/3] sm:aspect-[16/10] relative p-4 sm:p-6 flex flex-col justify-between"
-        style={{
-          backgroundImage: `url('/src/assets/images/bangladeshi_school_bench_1793167905184.jpg')`,
-          backgroundSize: 'cover',
-          backgroundPosition: 'center',
-        }}
-      >
-        <div className="absolute inset-0 bg-black/35 pointer-events-none" />
+  const centerPanel = (
+    <div className="col-span-2 sm:col-span-1 order-4 sm:order-none w-full max-w-md mx-auto p-4 sm:p-5 bg-amber-950/95 border-2 border-amber-600 rounded-2xl shadow-2xl text-center text-amber-100">
+      <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 mb-3 pb-2 border-b border-amber-800 text-sm font-bangla-hand">
+        <span className="text-emerald-400 font-bold flex items-center gap-1">
+          <Crown className="w-4 h-4" aria-hidden />
+          বাবু: {babuPlayer.name}
+        </span>
+        <span className="text-blue-400 font-bold flex items-center gap-1">
+          <Shield className="w-4 h-4" aria-hidden />
+          পুলিশ: {policePlayer.name}
+        </span>
+      </div>
 
-        {/* Top Header Strip */}
-        <div className="relative z-10 flex items-center justify-between">
-          <div className="px-3 py-1 bg-black/80 border border-amber-600/60 rounded-lg text-xs font-mono text-amber-300 font-bold backdrop-blur-sm">
-            রাউন্ড {currentRound} / {totalRounds}
-          </div>
+      {!isResolved && turnSecs !== undefined && !policePlayer.isBot && (
+        <Countdown
+          seconds={turnSecs}
+          total={30}
+          label={isPoliceTurn ? 'আপনার হাতে সময়' : `দারোগা ${policePlayer.name}-এর হাতে সময়`}
+          urgent={turnSecs <= 10}
+        />
+      )}
 
-          <div className="px-3 py-1 bg-black/80 border border-amber-600/60 rounded-lg text-xs font-bangla-hand text-amber-200 font-bold backdrop-blur-sm">
-            {isPassAndPlay ? 'পাস অ্যান্ড প্লে · ৪ বন্ধু' : '১ জন আসল + ৩ জন বট'} 📐
-          </div>
-        </div>
-
-        {/* SIDE 1: TOP PLAYER (North) */}
-        <div className="relative z-10 flex justify-center mt-4 sm:mt-6 mb-1">
-          {renderSeatChit(topPlayer, 'top')}
-        </div>
-
-        {/* MIDDLE ROW: LEFT PLAYER · CENTER TABLE ARENA · RIGHT PLAYER */}
-        <div className="relative z-10 flex items-center justify-between gap-2 sm:gap-4 my-auto">
-          {/* Left Player */}
-          <div className="shrink-0">
-            {renderSeatChit(leftPlayer, 'left')}
-          </div>
-
-          {/* CENTER TABLE ACTION ARENA */}
-          <div className="flex-1 max-w-md mx-auto p-4 sm:p-5 bg-amber-950/95 border-2 border-amber-600 rounded-2xl shadow-2xl text-center text-amber-100 font-serif backdrop-blur-md">
-            {/* PUBLIC REVEAL STATUS: Babu & Police are visible */}
-            <div className="flex items-center justify-center gap-2 mb-3 pb-2 border-b border-amber-800 text-xs font-bangla-hand">
-              <span className="text-emerald-400 font-bold flex items-center gap-1">
-                <Crown className="w-3.5 h-3.5" />
-                <span>বাবু: {babuPlayer.name} (১০০০)</span>
-              </span>
-              <span className="text-amber-500">·</span>
-              <span className="text-blue-400 font-bold flex items-center gap-1">
-                <Shield className="w-3.5 h-3.5" />
-                <span>পুলিশ: {policePlayer.name} (৫০০)</span>
+      {!isResolved && (
+        <div className="space-y-3 anim-fade" aria-live="polite">
+          {isPoliceTurn ? (
+            <>
+              <div>
+                <div className="text-sm text-amber-300 font-bold mb-1.5 font-bangla-hand">
+                  দারোগা {policePlayer.name}, কাকে খুঁজবেন?
+                </div>
+                <div className="inline-flex p-1 bg-black/60 rounded-xl border border-amber-600 gap-1.5" role="radiogroup" aria-label="কাকে খুঁজবেন">
+                  {(['dakat', 'chor'] as TargetRole[]).map((role) => (
+                    <button
+                      key={role}
+                      type="button"
+                      role="radio"
+                      aria-checked={targetRoleToCatch === role}
+                      onClick={() => onSetTargetRoleToCatch(role)}
+                      className={`px-3 py-1.5 rounded-lg text-sm font-bold transition-all ${
+                        targetRoleToCatch === role
+                          ? role === 'dakat'
+                            ? 'bg-rose-600 text-white shadow-md'
+                            : 'bg-purple-600 text-white shadow-md'
+                          : 'text-amber-200/80 hover:text-white'
+                      }`}
+                    >
+                      {TARGET_LABEL[role]} ({toBn(ROLE_DEFINITIONS[role].points)})
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="p-2.5 bg-blue-950/80 border border-blue-500/60 rounded-xl text-sm text-blue-100 flex items-center justify-center gap-1.5">
+                <Search className="w-4 h-4 shrink-0" aria-hidden />
+                <span>
+                  যাকে {TARGET_LABEL[targetRoleToCatch]} মনে হয়, তার গোপন চিরকুটে চাপ দিন!
+                </span>
+              </div>
+              {turnSecs !== undefined && (
+                <div className="text-xs text-amber-300/80">সময় শেষ হলে আপনা-আপনি একজনকে ধরা হবে।</div>
+              )}
+            </>
+          ) : (
+            <div className="p-3 bg-blue-950/80 border border-blue-500/60 rounded-xl text-sm text-blue-200 flex items-center justify-center gap-1.5">
+              <Search className={`w-4 h-4 shrink-0 ${isBotPoliceThinking ? 'animate-pulse' : ''}`} aria-hidden />
+              <span>
+                {isBotPoliceThinking && !isOnlineRoom
+                  ? `দারোগা ${policePlayer.name} ${TARGET_LABEL[targetRoleToCatch]} খুঁজছেন... চোখে চোখ রাখুন!`
+                  : policePlayer.isOnline === false
+                  ? `দারোগা ${policePlayer.name} অফলাইন — একটু পরে আপনা-আপনি ধরা হবে`
+                  : `দারোগা ${policePlayer.name} সন্দেহভাজনদের পরখ করছেন...`}
               </span>
             </div>
+          )}
+        </div>
+      )}
 
-            {/* INTERROGATION PHASE: Police investigates */}
-            {roundPhase === 'interrogation' && (
-              <div className="space-y-3 animate-in fade-in">
-                {/* Target Selection: Police chooses to catch Chor or Dakat */}
-                <div>
-                  <div className="text-[11px] text-amber-300 font-bold mb-1.5 font-bangla-hand">
-                    দারোগা {policePlayer.name} কাকে খুঁজবেন? (Select Target):
-                  </div>
-                  <div className="inline-flex p-1 bg-black/60 rounded-xl border border-amber-600 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => onSetTargetRoleToCatch('dakat')}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                        targetRoleToCatch === 'dakat'
-                          ? 'bg-rose-600 text-white shadow-md'
-                          : 'text-rose-300 hover:text-white'
-                      }`}
-                    >
-                      ডাকাত খুঁজুন (৪০০ পঃ)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onSetTargetRoleToCatch('chor')}
-                      className={`px-3 py-1 rounded-lg text-xs font-bold transition-all ${
-                        targetRoleToCatch === 'chor'
-                          ? 'bg-purple-600 text-white shadow-md'
-                          : 'text-purple-300 hover:text-white'
-                      }`}
-                    >
-                      চোর খুঁজুন (১০০ পঃ)
-                    </button>
-                  </div>
-                </div>
-
-                {/* Prompt based on who is Police */}
-                {isPoliceTurn ? (
-                  <div className="p-2.5 bg-blue-950/80 border border-blue-500/60 rounded-xl text-xs text-blue-200">
-                    <div className="font-bold text-amber-300 flex items-center justify-center gap-1 mb-0.5">
-                      <Search className="w-3.5 h-3.5" />
-                      <span>দারোগা {policePlayer.name}, বাকি দুটি গোপন চিরকুটের একটিতে চাপ দিন!</span>
-                    </div>
-                    <div className="text-[11px] text-slate-300 font-bangla-hand">
-                      চিহ্নিত সন্দেহভাজনকে {targetRoleToCatch === 'dakat' ? 'ডাকাত' : 'চোর'} ঘোষণা করুন।
-                    </div>
-                  </div>
-                ) : (
-                  <div className="p-2.5 bg-blue-950/80 border border-blue-500/60 rounded-xl text-xs text-blue-300 animate-pulse flex items-center justify-center gap-1.5">
-                    <Search className="w-3.5 h-3.5" />
-                    <span>
-                      {botPoliceThoughtText ||
-                        `দারোগা ${policePlayer.name} সন্দেহভাজন চোর ও ডাকাতকে পরখ করছেন...`}
-                    </span>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* RESOLVED PHASE: Verdict */}
-            {roundPhase === 'resolved' && (
-              <div className="space-y-2.5 animate-in zoom-in-95">
-                <div className="flex items-center justify-center gap-2 font-bold text-sm">
-                  {isCorrectGuess ? (
-                    <span className="text-emerald-400 flex items-center gap-1">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span>সঠিক অনুমান! অপরাধী ধরা পড়েছে!</span>
-                    </span>
-                  ) : (
-                    <span className="text-rose-400 flex items-center gap-1">
-                      <XCircle className="w-4 h-4" />
-                      <span>ভুল অনুমান! আসল অপরাধী পালিয়ে গেছে!</span>
-                    </span>
-                  )}
-                </div>
-
-                <div className="text-xs text-amber-200 leading-tight font-bangla-hand">
-                  {isCorrectGuess
-                    ? `পুলিশ ৫০০ পয়েন্ট পেলেন! ধৃত অপরাধী ০ পয়েন্ট পেলেন।`
-                    : `পুলিশ ০ পেলেন! অপরাধীদের পয়েন্ট সুরক্ষিত রইল।`}
-                </div>
-
-                {/* Automatic Khata Score Addition Badge */}
-                <div className="py-1 px-2.5 bg-emerald-950/70 border border-emerald-500/60 rounded-lg text-[11px] font-bangla-hand text-emerald-300 flex items-center justify-center gap-1.5 shadow-inner">
-                  <span>📓 রাউন্ড {currentRound}-এর পয়েন্ট স্বয়ংক্রিয়ভাবে খাতায় যোগ হয়েছে!</span>
-                </div>
-
-                <div className="flex items-center justify-center gap-2 pt-1">
-                  {onOpenScoreKhata && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        sound.playPaperRustle();
-                        onOpenScoreKhata();
-                      }}
-                      className="py-1.5 px-3 bg-amber-900/90 hover:bg-amber-800 text-amber-200 border border-amber-600 rounded-xl text-xs font-bold transition-all shadow-md flex items-center gap-1"
-                    >
-                      <span>খাতা দেখুন 📓</span>
-                    </button>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      sound.playChitDrop();
-                      onNextRound();
-                    }}
-                    className="py-1.5 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-xs shadow-md transition-all inline-flex items-center gap-1.5"
-                  >
-                    <span>পরবর্তী রাউন্ড শুরু করুন</span>
-                    <ArrowRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
+      {isResolved && accused && (
+        <div className="space-y-2.5 anim-pop" aria-live="polite">
+          <div className="flex items-center justify-center gap-1.5 font-bold text-base">
+            {isCorrectGuess ? (
+              <span className="text-emerald-400 flex items-center gap-1">
+                <CheckCircle2 className="w-5 h-5" aria-hidden /> সঠিক অনুমান! অপরাধী ধরা পড়েছে!
+              </span>
+            ) : (
+              <span className="text-rose-400 flex items-center gap-1">
+                <XCircle className="w-5 h-5" aria-hidden /> ভুল অনুমান! আসল অপরাধী পালিয়েছে!
+              </span>
             )}
           </div>
 
-          {/* Right Player */}
-          <div className="shrink-0">
-            {renderSeatChit(rightPlayer, 'right')}
+          <div className="text-sm text-amber-200 leading-snug font-bangla-hand">
+            {wasAutoAccused && <div className="text-amber-400 font-bold">⏰ সময় শেষ! আপনা-আপনি অভিযোগ করা হয়েছে।</div>}
+            দারোগা {policePlayer.name} {TARGET_LABEL[targetRoleToCatch]} খুঁজতে গিয়ে {accused.name}-কে ধরলেন —{' '}
+            {accused.role !== 'hidden' && `${accused.name} আসলে ${ROLE_DEFINITIONS[accused.role].nameBn}।`}
+            <br />
+            {isCorrectGuess ? 'পুলিশ পেলেন ৫০০, ধৃত অপরাধী ০।' : 'পুলিশ পেলেন ০, অপরাধীদের পয়েন্ট সুরক্ষিত।'}
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onOpenScoreKhata}
+              className="py-2 px-3 bg-amber-900/90 hover:bg-amber-800 text-amber-200 border border-amber-600 rounded-xl text-sm font-bold transition-colors"
+            >
+              খাতা দেখুন 📓
+            </button>
+            <button
+              type="button"
+              onClick={onNextRound}
+              autoFocus
+              className="py-2 px-4 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-black rounded-xl text-sm shadow-md transition-all inline-flex items-center gap-1.5"
+            >
+              {isLastRound ? 'চূড়ান্ত ফলাফল দেখুন' : 'পরবর্তী রাউন্ড'}
+              {nextSecs !== undefined && <span className="font-bold opacity-80">({toBn(nextSecs)})</span>}
+              <ArrowRight className="w-4 h-4" aria-hidden />
+            </button>
+          </div>
+          {nextSecs !== undefined && (
+            <div className="text-xs text-amber-300/80">
+              {isLastRound ? 'ফলাফল' : 'পরবর্তী রাউন্ড'} আপনা-আপনি শুরু হবে {toBn(nextSecs)} সেকেন্ডে
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <section
+      aria-label="খেলার টেবিল"
+      className="relative w-full max-w-4xl mx-auto rounded-3xl overflow-hidden border-4 border-amber-950 shadow-2xl bg-amber-950 anim-fade"
+    >
+      <div
+        className="relative p-3 sm:p-6 bg-cover bg-center"
+        style={{ backgroundImage: `linear-gradient(rgba(0,0,0,0.4), rgba(0,0,0,0.4)), url(${benchUrl})` }}
+      >
+        <div className="flex items-center justify-between gap-2 mb-3 sm:mb-4">
+          <div className="px-3 py-1 bg-black/80 border border-amber-600/60 rounded-lg text-sm text-amber-300 font-bold">
+            রাউন্ড {toBn(currentRound)} / {toBn(totalRounds)}
+          </div>
+          <div className="hidden sm:block px-3 py-1 bg-black/80 border border-amber-600/60 rounded-lg text-sm font-bangla-hand text-amber-200 truncate max-w-[16rem]">
+            {isPassAndPlay ? 'পাস অ্যান্ড প্লে · ৪ বন্ধু' : isOnlineRoom ? `🌐 ${roomName ?? 'অনলাইন রুম'}` : '১ জন + ৩ জন বট'}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onOpenScoreKhata}
+              className="px-3 py-1 bg-blue-700 hover:bg-blue-600 border border-blue-400/60 rounded-lg text-sm text-white font-bold flex items-center gap-1.5 transition-colors"
+            >
+              <NotebookPen className="w-4 h-4" aria-hidden />
+              খাতা
+            </button>
+            {onLeave && (
+              <button
+                type="button"
+                onClick={onLeave}
+                aria-label="রুম ছাড়ুন"
+                title="রুম ছাড়ুন"
+                className="p-1.5 bg-black/80 hover:bg-rose-900 border border-rose-500/60 rounded-lg text-rose-200 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            )}
           </div>
         </div>
 
-        {/* SIDE 4: BOTTOM PLAYER (South) */}
-        <div className="relative z-10 flex justify-center mb-1">
-          {renderSeatChit(bottomPlayer, 'bottom')}
+        <div className="grid grid-cols-2 sm:grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 sm:gap-4">
+          {renderSeat(topPlayer, 'top')}
+          {renderSeat(leftPlayer, 'left')}
+          {centerPanel}
+          {renderSeat(rightPlayer, 'right')}
+          {renderSeat(bottomPlayer, 'bottom')}
         </div>
+
+        {isOnlineRoom && onReact && <ReactionBar onReact={onReact} />}
+      </div>
+    </section>
+  );
+};
+
+const Countdown: React.FC<{ seconds: number; total: number; label: string; urgent: boolean }> = ({
+  seconds,
+  total,
+  label,
+  urgent,
+}) => (
+  <div className="mb-3" role="timer" aria-label={`${label}: ${seconds} সেকেন্ড`}>
+    <div className={`flex items-center justify-center gap-1.5 text-sm font-bold mb-1 ${urgent ? 'text-rose-300' : 'text-amber-200'}`}>
+      <Timer className={`w-4 h-4 ${urgent ? 'animate-pulse' : ''}`} aria-hidden />
+      {label}: {toBn(seconds)} সে.
+    </div>
+    <div className="h-1.5 bg-black/50 rounded-full overflow-hidden">
+      <div
+        className={`h-full rounded-full transition-[width] duration-500 ease-linear ${urgent ? 'bg-rose-500' : 'bg-amber-400'}`}
+        style={{ width: `${Math.min(100, (seconds / total) * 100)}%` }}
+      />
+    </div>
+  </div>
+);
+
+// Quick emoji / phrase reactions for online rooms (fixed list, no free text)
+const ReactionBar: React.FC<{ onReact: (text: string) => void }> = ({ onReact }) => {
+  const [coolingDown, setCoolingDown] = useState(false);
+  const send = (text: string) => {
+    if (coolingDown) return;
+    onReact(text);
+    setCoolingDown(true);
+    setTimeout(() => setCoolingDown(false), REACT_COOLDOWN_MS);
+  };
+  return (
+    <div className="mt-4 p-2 bg-black/70 border border-amber-800/70 rounded-2xl" role="group" aria-label="দ্রুত প্রতিক্রিয়া">
+      <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
+        {QUICK_EMOJIS.map((e) => (
+          <button
+            key={e}
+            type="button"
+            disabled={coolingDown}
+            onClick={() => send(e)}
+            className="shrink-0 w-10 h-10 text-2xl rounded-xl hover:bg-white/10 active:scale-90 transition-transform disabled:opacity-50"
+            aria-label={`প্রতিক্রিয়া ${e}`}
+          >
+            {e}
+          </button>
+        ))}
+        <span className="shrink-0 w-px h-6 bg-amber-800 mx-1" aria-hidden />
+        {QUICK_PHRASES.map((p) => (
+          <button
+            key={p}
+            type="button"
+            disabled={coolingDown}
+            onClick={() => send(p)}
+            className="shrink-0 px-3 py-1.5 text-sm font-bangla-hand font-bold text-amber-100 bg-amber-900/60 hover:bg-amber-800 border border-amber-700 rounded-full whitespace-nowrap active:scale-95 transition-transform disabled:opacity-50"
+          >
+            {p}
+          </button>
+        ))}
       </div>
     </div>
   );

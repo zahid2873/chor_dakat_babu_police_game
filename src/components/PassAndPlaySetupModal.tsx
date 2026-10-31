@@ -1,131 +1,97 @@
 import React, { useState } from 'react';
-import { X, Users, Play, Sparkles } from 'lucide-react';
-import { sound } from '../utils/audio';
+import { Users, Play } from 'lucide-react';
+import { ROUND_OPTIONS, toBn } from '../utils/constants';
+import { Modal } from './Modal';
 
 interface PassAndPlaySetupModalProps {
-  isOpen: boolean;
   onClose: () => void;
   onStartPassAndPlay: (names: string[], rounds: number) => void;
-  initialNames?: string[];
+  initialNames: string[];
+  initialRounds: number;
 }
 
 const DEFAULT_EMOJIS = ['🧑‍🎓', '👦', '👧', '🧔'];
+const SIDE_LABELS = ['নিচে (দক্ষিণ)', 'বামে (পশ্চিম)', 'উপরে (উত্তর)', 'ডানে (পূর্ব)'];
 
 export const PassAndPlaySetupModal: React.FC<PassAndPlaySetupModalProps> = ({
-  isOpen,
   onClose,
   onStartPassAndPlay,
-  initialNames = ['আপনি', 'X', 'Y', 'Z'],
+  initialNames,
+  initialRounds,
 }) => {
   const [names, setNames] = useState<string[]>(initialNames);
-  const [rounds, setRounds] = useState(5);
+  const [rounds, setRounds] = useState(ROUND_OPTIONS.includes(initialRounds) ? initialRounds : 5);
 
-  if (!isOpen) return null;
-
-  const handleNameChange = (index: number, val: string) => {
-    const updated = [...names];
-    updated[index] = val;
-    setNames(updated);
-  };
-
-  const handleStart = () => {
-    sound.playChitDrop();
-    const finalNames = names.map((n, i) => n.trim() || `খেলোয়াড় ${i + 1}`);
-    onStartPassAndPlay(finalNames, rounds);
+  const handleStart = (e: React.FormEvent) => {
+    e.preventDefault();
+    const finalNames = names.map((n, i) => n.trim() || `খেলোয়াড় ${toBn(i + 1)}`);
     onClose();
+    onStartPassAndPlay(finalNames, rounds);
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-3 sm:p-4">
-      <div className="relative w-full max-w-md notebook-ruled-page p-6 sm:p-7 rounded-2xl shadow-2xl border-2 border-emerald-600 text-slate-900 font-serif animate-in zoom-in-95 duration-200">
-        {/* Header */}
-        <div className="flex items-center justify-between pb-3 border-b-2 border-blue-400 mb-4">
-          <div className="flex items-center gap-2">
-            <Users className="w-6 h-6 text-emerald-700" />
-            <div>
-              <h3 className="text-xl font-bold ink-blue-text font-bangla-hand">
-                পাস অ্যান্ড প্লে (৪ বন্ধু এক ডিভাইসে) 📱
-              </h3>
-              <div className="text-[11px] text-slate-600 font-mono">
-                একই কাঠের বেঞ্চে চার কোণায় চারজন
-              </div>
-            </div>
-          </div>
+    <Modal
+      onClose={onClose}
+      className="max-w-md border-emerald-600"
+      icon={<Users className="w-6 h-6 text-emerald-700 shrink-0" />}
+      title="পাস অ্যান্ড প্লে 📱"
+      subtitle="একই ডিভাইসে, বেঞ্চের চার কোণায় চারজন"
+    >
+      <form onSubmit={handleStart}>
+        <fieldset className="space-y-2.5 mb-5">
+          <legend className="text-sm font-bold text-blue-950 mb-2">চার বন্ধুর নাম লিখুন:</legend>
+          {SIDE_LABELS.map((side, idx) => (
+            <label
+              key={idx}
+              className="flex items-center gap-2 p-2 bg-white/80 border border-blue-300 rounded-xl focus-within:border-blue-600"
+            >
+              <span className="text-xl shrink-0" aria-hidden>
+                {DEFAULT_EMOJIS[idx]}
+              </span>
+              <span className="flex-1">
+                <span className="block text-[11px] text-slate-500">
+                  আসন {toBn(idx + 1)} · {side}
+                </span>
+                <input
+                  type="text"
+                  value={names[idx] || ''}
+                  onChange={(e) => setNames((prev) => prev.map((n, i) => (i === idx ? e.target.value : n)))}
+                  placeholder={`খেলোয়াড় ${toBn(idx + 1)}`}
+                  maxLength={16}
+                  className="w-full bg-transparent font-bangla-hand font-bold text-base text-blue-950 focus:outline-none"
+                />
+              </span>
+            </label>
+          ))}
+        </fieldset>
 
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg text-slate-600 hover:text-slate-950 hover:bg-amber-200 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* 4 Player Names Inputs */}
-        <div className="space-y-3 mb-5">
-          <div className="text-xs font-bold text-blue-950 font-bangla-hand">
-            চার বন্ধুর নাম লিখুন (৪টি আসন):
-          </div>
-
-          {[0, 1, 2, 3].map((idx) => {
-            const sideLabels = ['নিচে (দক্ষিণ)', 'বামে (পশ্চিম)', 'উপরে (উত্তর)', 'ডানে (পূর্ব)'];
-
-            return (
-              <div
-                key={idx}
-                className="flex items-center gap-2 p-2 bg-white/80 border border-blue-300 rounded-xl shadow-sm"
-              >
-                <span className="text-xl shrink-0">{DEFAULT_EMOJIS[idx]}</span>
-                <div className="flex-1">
-                  <div className="text-[10px] text-slate-500 font-mono">
-                    আসন {idx + 1} · {sideLabels[idx]}
-                  </div>
-                  <input
-                    type="text"
-                    value={names[idx] || ''}
-                    onChange={(e) => handleNameChange(idx, e.target.value)}
-                    placeholder={`খেলোয়াড় ${idx + 1}`}
-                    maxLength={16}
-                    className="w-full bg-transparent font-bangla-hand font-bold text-sm text-blue-950 focus:outline-none"
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Rounds Selector */}
-        <div className="mb-5">
-          <label className="block text-xs font-bold text-blue-950 font-bangla-hand mb-1.5">
-            ম্যাচ কত রাউন্ডের হবে?
-          </label>
+        <fieldset className="mb-5">
+          <legend className="text-sm font-bold text-blue-950 mb-1.5">ম্যাচ কত রাউন্ডের হবে?</legend>
           <div className="grid grid-cols-3 gap-2">
-            {[3, 5, 10].map((r) => (
+            {ROUND_OPTIONS.map((r) => (
               <button
                 key={r}
                 type="button"
+                aria-pressed={rounds === r}
                 onClick={() => setRounds(r)}
-                className={`py-1.5 rounded-xl text-xs font-bold font-mono transition-all border ${
-                  rounds === r
-                    ? 'border-emerald-600 bg-emerald-700 text-white shadow'
-                    : 'border-blue-200 bg-white text-blue-900 hover:bg-blue-50'
+                className={`py-2 rounded-xl text-sm font-bold transition-all border ${
+                  rounds === r ? 'border-emerald-600 bg-emerald-700 text-white shadow' : 'border-blue-200 bg-white text-blue-900 hover:bg-blue-50'
                 }`}
               >
-                {r} রাউন্ড
+                {toBn(r)} রাউন্ড
               </button>
             ))}
           </div>
-        </div>
+        </fieldset>
 
-        {/* Start Button */}
         <button
-          type="button"
-          onClick={handleStart}
-          className="w-full py-3 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold rounded-xl text-sm shadow-md transition-all flex items-center justify-center gap-2"
+          type="submit"
+          className="w-full py-3 bg-gradient-to-r from-emerald-700 to-emerald-800 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold rounded-xl text-base shadow-md transition-all flex items-center justify-center gap-2"
         >
-          <Play className="w-4 h-4 fill-current" />
-          <span>বেঞ্চে চিরকুট ওড়ান (Start Match)</span>
+          <Play className="w-4 h-4 fill-current" aria-hidden />
+          বেঞ্চে চিরকুট ছড়ান — খেলা শুরু
         </button>
-      </div>
-    </div>
+      </form>
+    </Modal>
   );
 };

@@ -1,985 +1,832 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { PaperPlayer, RoleType, GameMode } from './types/game';
-import { ROLE_DEFINITIONS, BLUFF_REACTIONS } from './utils/constants';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { GameMode, MatchPhase, PaperPlayer, RoleType, RoomReaction, RoundPhase, TargetRole } from './types/game';
+import {
+  BOT_POLICE_ACCURACY,
+  BOT_POLICE_THINK_MS,
+  ROLE_DEFINITIONS,
+  ROUND_OPTIONS,
+  isSuspectRole,
+  pick,
+  roundPoints,
+  shuffleRoles,
+  toBn,
+} from './utils/constants';
 import { sound } from './utils/audio';
 import { FourPlayerTable } from './components/FourPlayerTable';
 import { SideScoreDrawer } from './components/SideScoreDrawer';
 import { NotebookScoreboard } from './components/NotebookScoreboard';
 import { PlayerProfileModal } from './components/PlayerProfileModal';
 import { PassAndPlaySetupModal } from './components/PassAndPlaySetupModal';
-import { OnlineRoomHub } from './components/OnlineRoomHub';
-import { RoomConnection } from './utils/roomConnection';
-import {
-  Volume2,
-  VolumeX,
-  BookOpen,
-  Bot,
-  RotateCcw,
-  Sparkles,
-  ArrowRight,
-  FileText,
-  Share2,
-  Check,
-  Globe,
-  User,
-  Users,
-  Palette,
-} from 'lucide-react';
+import { OnlineRoomHub, WaitingRoom } from './components/OnlineRoomHub';
+import { RulesModal } from './components/RulesModal';
+import { RoomConnection, RoomMessage } from './utils/roomConnection';
+import { Volume2, VolumeX, BookOpen, Bot, ArrowRight, Share2, Check, Globe, Users } from 'lucide-react';
+
+type BgTheme = 'wood' | 'green' | 'navy' | 'mahogany';
+type ModalName = 'profile' | 'passAndPlay' | 'online' | 'rules' | 'score';
+
+const THEMES: { id: BgTheme; label: string; swatch: string }[] = [
+  { id: 'wood', label: 'সেগুন কাঠ', swatch: '#8a4f24' },
+  { id: 'green', label: 'সবুজ ব্ল্যাকবোর্ড', swatch: '#1a4d36' },
+  { id: 'navy', label: 'নীল কালির বোর্ড', swatch: '#1e3a68' },
+  { id: 'mahogany', label: 'মেহগনি ডেস্ক', swatch: '#5e1c1c' },
+];
+
+const BOT_SEATS = [
+  { id: 'bot-1', emoji: '👦' },
+  { id: 'bot-2', emoji: '🧔' },
+  { id: 'bot-3', emoji: '👧' },
+];
+const PASS_AND_PLAY_EMOJIS = ['🧑‍🎓', '👦', '👧', '🧔'];
+
+// localStorage can throw (private mode, blocked storage); never let that break the game.
+function readStore(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+function writeStore(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {}
+}
+
+const newPlayer = (id: string, name: string, avatarEmoji: string, isBot: boolean): PaperPlayer => ({
+  id,
+  name,
+  isBot,
+  avatarEmoji,
+  role: 'babu',
+  scoreHistory: [],
+  totalScore: 0,
+});
+
+function dealRoles(players: PaperPlayer[]): PaperPlayer[] {
+  const roles = shuffleRoles();
+  return players.map((p, idx) => ({
+    ...p,
+    role: roles[idx],
+    currentDialogue: pick(ROLE_DEFINITIONS[roles[idx]].dialogues),
+  }));
+}
+
+function roomUrl(roomId?: string) {
+  const url = new URL(window.location.href);
+  url.search = '';
+  url.hash = '';
+  if (roomId) url.searchParams.set('room', roomId);
+  return url.toString();
+}
+
+// Prefix the tab title until the player comes back to the tab
+function flashTitle(text: string) {
+  if (document.visibilityState === 'visible') return;
+  const original = document.title.replace(/^🔔[^—]*— /, '');
+  document.title = `${text} — ${original}`;
+  const restore = () => {
+    if (document.visibilityState !== 'visible') return;
+    document.title = original;
+    document.removeEventListener('visibilitychange', restore);
+  };
+  document.addEventListener('visibilitychange', restore);
+}
 
 export default function App() {
   const [isMuted, setIsMuted] = useState(() => sound.getMuted());
-
-  // Background Theme State
-  const [bgTheme, setBgTheme] = useState<'wood' | 'green' | 'navy' | 'mahogany'>(() => {
-    return (localStorage.getItem('cpdb_bg_theme') as any) || 'wood';
+  const [bgTheme, setBgTheme] = useState<BgTheme>(() => {
+    const saved = readStore('cpdb_bg_theme', 'wood');
+    return THEMES.some((t) => t.id === saved) ? (saved as BgTheme) : 'wood';
   });
 
-  const handleSetBgTheme = (theme: 'wood' | 'green' | 'navy' | 'mahogany') => {
-    setBgTheme(theme);
-    localStorage.setItem('cpdb_bg_theme', theme);
-  };
-
-  const bgThemeClass =
-    bgTheme === 'green'
-      ? 'theme-green'
-      : bgTheme === 'navy'
-      ? 'theme-navy'
-      : bgTheme === 'mahogany'
-      ? 'theme-mahogany'
-      : 'theme-wood';
-
-  // Player Profile with persistence
-  const [playerName, setPlayerName] = useState(() => {
-    return localStorage.getItem('cpdb_player_name') || 'আপনি';
-  });
-  const [playerEmoji, setPlayerEmoji] = useState(() => {
-    return localStorage.getItem('cpdb_player_emoji') || '🧑‍🎓';
-  });
-  const [nameX, setNameX] = useState(() => {
-    return localStorage.getItem('cpdb_player_x') || 'X';
-  });
-  const [nameY, setNameY] = useState(() => {
-    return localStorage.getItem('cpdb_player_y') || 'Y';
-  });
-  const [nameZ, setNameZ] = useState(() => {
-    return localStorage.getItem('cpdb_player_z') || 'Z';
-  });
+  // Player profile with persistence
+  const [playerName, setPlayerName] = useState(() => readStore('cpdb_player_name', 'আপনি'));
+  const [playerEmoji, setPlayerEmoji] = useState(() => readStore('cpdb_player_emoji', '🧑‍🎓'));
+  const [botNames, setBotNames] = useState(() => [
+    readStore('cpdb_player_x', 'X'),
+    readStore('cpdb_player_y', 'Y'),
+    readStore('cpdb_player_z', 'Z'),
+  ]);
   const [playerId] = useState(() => {
-    let id = localStorage.getItem('cpdb_player_id');
+    let id = readStore('cpdb_player_id', '');
     if (!id) {
-      id = 'user-' + Math.random().toString(36).substring(2, 9);
-      localStorage.setItem('cpdb_player_id', id);
+      id = 'user-' + Math.random().toString(36).substring(2, 10);
+      writeStore('cpdb_player_id', id);
     }
     return id;
   });
 
-  // Modals
-  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
-  const [isPassAndPlayModalOpen, setIsPassAndPlayModalOpen] = useState(false);
-  const [isRoomHubOpen, setIsRoomHubOpen] = useState(false);
-  const [isScoreDrawerOpen, setIsScoreDrawerOpen] = useState(false);
-  const [isRulesOpen, setIsRulesOpen] = useState(false);
+  const [modal, setModal] = useState<ModalName | null>(null);
   const [copiedLink, setCopiedLink] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ text: string; tone: 'error' | 'info' } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
-  // Match State
+  // Match state
   const [gameMode, setGameMode] = useState<GameMode>('vsBots');
-  const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
-  const [activeRoomName, setActiveRoomName] = useState<string | null>(null);
+  const [phase, setPhase] = useState<MatchPhase>('lobby');
   const [totalRounds, setTotalRounds] = useState(5);
   const [currentRound, setCurrentRound] = useState(1);
-  const [phase, setPhase] = useState<'lobby' | 'playing' | 'scoreboard' | 'finished'>('lobby');
-
-  // Round phase: 'interrogation' (Babu & Police revealed, Chor & Dakat hidden) -> 'resolved' (all revealed)
-  const [roundPhase, setRoundPhase] = useState<'interrogation' | 'resolved'>('interrogation');
-
-  const [targetRoleToCatch, setTargetRoleToCatch] = useState<'chor' | 'dakat'>('dakat');
-
-  // Matchmaking State
-  const [isMatchmakingActive, setIsMatchmakingActive] = useState(false);
-  const [matchmakingWaitingCount, setMatchmakingWaitingCount] = useState(1);
-
-  // Players in 4 seats (South, West, North, East)
-  const [players, setPlayers] = useState<PaperPlayer[]>([
-    {
-      id: playerId,
-      name: playerName,
-      isBot: false,
-      avatarEmoji: playerEmoji,
-      role: 'babu',
-      chitIndex: 0,
-      hasSeenChit: true,
-      currentReaction: BLUFF_REACTIONS[0].text,
-      currentDialogue: '',
-      scoreHistory: [],
-      totalScore: 0,
-    },
-    {
-      id: 'bot-1',
-      name: nameX,
-      isBot: true,
-      avatarEmoji: '👦',
-      role: 'police',
-      chitIndex: 1,
-      hasSeenChit: true,
-      currentReaction: BLUFF_REACTIONS[1].text,
-      currentDialogue: '',
-      scoreHistory: [],
-      totalScore: 0,
-    },
-    {
-      id: 'bot-2',
-      name: nameY,
-      isBot: true,
-      avatarEmoji: '🧔',
-      role: 'dakat',
-      chitIndex: 2,
-      hasSeenChit: true,
-      currentReaction: BLUFF_REACTIONS[2].text,
-      currentDialogue: '',
-      scoreHistory: [],
-      totalScore: 0,
-    },
-    {
-      id: 'bot-3',
-      name: nameZ,
-      isBot: true,
-      avatarEmoji: '👧',
-      role: 'chor',
-      chitIndex: 3,
-      hasSeenChit: true,
-      currentReaction: BLUFF_REACTIONS[3].text,
-      currentDialogue: '',
-      scoreHistory: [],
-      totalScore: 0,
-    },
-  ]);
-
+  const [roundPhase, setRoundPhase] = useState<RoundPhase>('interrogation');
+  const [targetRoleToCatch, setTargetRoleToCatch] = useState<TargetRole>('dakat');
+  const [players, setPlayers] = useState<PaperPlayer[]>([]);
   const [accusedPlayerId, setAccusedPlayerId] = useState<string | null>(null);
   const [isCorrectGuess, setIsCorrectGuess] = useState(false);
-  const [isBotPoliceThinking, setIsBotPoliceThinking] = useState(false);
-  const [botPoliceThoughtText, setBotPoliceThoughtText] = useState<string | null>(null);
+  // Bumped on every local deal so per-round effects re-run even when the round number repeats
+  const [dealId, setDealId] = useState(0);
 
-  // Online room connection (HTTP polling via Netlify Functions)
-  const wsRef = useRef<RoomConnection | null>(null);
+  // Online room state
+  const [activeRoom, setActiveRoom] = useState<WaitingRoom | null>(null);
+  const [isMatchmakingActive, setIsMatchmakingActive] = useState(false);
+  const [matchmakingWaitingCount, setMatchmakingWaitingCount] = useState(1);
+  const [roomTimers, setRoomTimers] = useState<{ turnDeadline?: number; nextRoundAt?: number; wasAutoAccused?: boolean }>({});
+  const [reactions, setReactions] = useState<RoomReaction[]>([]);
+  const [isConnected, setIsConnected] = useState(true);
+  const connRef = useRef<RoomConnection | null>(null);
+  const lastResolvedRef = useRef<string | null>(null);
+  const lastTurnAlertRef = useRef<string | null>(null);
+  const prevHumansRef = useRef<{ roomId: string; names: Map<string, string> } | null>(null);
+
+  const isOnline = gameMode === 'online' && activeRoom !== null;
+
+  const showToast = useCallback((text: string, tone: 'error' | 'info' = 'error') => {
+    setToast({ text, tone });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), tone === 'info' ? 3000 : 4500);
+  }, []);
+
+  const playVerdict = (isCorrect: boolean) => {
+    sound.playPenScratch();
+    if (isCorrect) sound.playSuccess();
+    else sound.playWrong();
+  };
+
+  // ---- Online connection ----
+  const applyRoomMessage = useCallback(
+    (msg: RoomMessage) => {
+      if (msg.type === 'MATCHMAKING_STATUS') {
+        setIsMatchmakingActive(true);
+        setMatchmakingWaitingCount(msg.waitingCount || 1);
+        return;
+      }
+      if (msg.type === 'ERROR') {
+        setIsMatchmakingActive(false);
+        showToast(msg.message);
+        return;
+      }
+
+      const room = msg.room;
+      setIsMatchmakingActive(false);
+      setGameMode('online');
+      setActiveRoom({
+        id: room.id,
+        name: room.name,
+        status: room.status,
+        hostPlayerId: room.hostPlayerId,
+        totalRounds: room.totalRounds,
+        players: room.players.map((rp: any) => ({
+          id: rp.id,
+          name: rp.name,
+          avatarEmoji: rp.avatarEmoji,
+          isBot: rp.isBot,
+          isOnline: rp.online,
+        })),
+      });
+      setRoomTimers({ turnDeadline: room.turnDeadline, nextRoundAt: room.nextRoundAt, wasAutoAccused: room.wasAutoAccused });
+      setReactions(room.reactions || []);
+
+      // Keep ?room= in the address bar so a refresh drops you straight back in
+      if (new URLSearchParams(window.location.search).get('room') !== room.id) {
+        window.history.replaceState(null, '', roomUrl(room.id));
+      }
+
+      // Join / leave notices
+      const humans = new Map<string, string>(
+        room.players.filter((p: any) => !p.isBot).map((p: any) => [p.id, p.name] as [string, string])
+      );
+      const prev = prevHumansRef.current;
+      if (prev && prev.roomId === room.id) {
+        humans.forEach((name, id) => {
+          if (!prev.names.has(id) && id !== playerId) showToast(`${name} রুমে যোগ দিয়েছে 👋`, 'info');
+        });
+        prev.names.forEach((name, id) => {
+          if (!humans.has(id)) showToast(`${name} রুম ছেড়ে গেছে`, 'info');
+        });
+      }
+      prevHumansRef.current = { roomId: room.id, names: humans };
+      setTotalRounds(room.totalRounds);
+      setCurrentRound(room.currentRound);
+      const resolved = room.roundPhase === 'resolved';
+      setRoundPhase(resolved ? 'resolved' : 'interrogation');
+      setTargetRoleToCatch(room.targetRoleToCatch);
+      setAccusedPlayerId(room.accusedPlayerId);
+      setIsCorrectGuess(room.isCorrectGuess);
+      setPlayers(
+        room.players.map((rp: any) => ({
+          id: rp.id,
+          name: rp.name,
+          isBot: rp.isBot,
+          avatarEmoji: rp.avatarEmoji,
+          role: rp.role,
+          currentDialogue: rp.currentDialogue,
+          scoreHistory: rp.scoreHistory || [],
+          totalScore: rp.totalScore || 0,
+          isOnline: rp.online,
+        }))
+      );
+
+      // "Your turn" alert once per deal when you draw Police
+      const myPolice = room.players.find((p: any) => p.role === 'police')?.id === playerId;
+      const turnKey = `${room.id}:${room.turnDeadline}`;
+      if (room.status === 'playing' && !resolved && myPolice && lastTurnAlertRef.current !== turnKey) {
+        lastTurnAlertRef.current = turnKey;
+        sound.playPoliceWhistle();
+        navigator.vibrate?.(200);
+        showToast('আপনি এবার দারোগা! চোর বা ডাকাত ধরুন 👮', 'info');
+        flashTitle('🔔 আপনার পালা!');
+      }
+
+      const resolvedKey = `${room.id}:${room.nextRoundAt}`;
+      if (resolved && room.status === 'playing' && lastResolvedRef.current !== resolvedKey) {
+        lastResolvedRef.current = resolvedKey;
+        playVerdict(room.isCorrectGuess);
+      }
+
+      if (room.status === 'playing') {
+        setPhase('playing');
+        setModal((m) => (m === 'online' ? null : m));
+      } else if (room.status === 'waiting') {
+        setPhase('lobby');
+      } else if (room.status === 'finished') {
+        setPhase((p) => {
+          if (p !== 'scoreboard') sound.playVictory();
+          return 'scoreboard';
+        });
+      }
+    },
+    [showToast, playerId]
+  );
 
   useEffect(() => {
-    let ws: RoomConnection | null = null;
-    try {
-      ws = new RoomConnection(playerId);
+    const conn = new RoomConnection(playerId);
+    conn.onmessage = applyRoomMessage;
+    conn.onstatus = setIsConnected;
+    connRef.current = conn;
 
-      const urlParams = new URLSearchParams(window.location.search);
-      const roomParam = urlParams.get('room');
-      if (roomParam) {
-        ws.send(
-          JSON.stringify({
-            type: 'JOIN_ROOM',
-            roomId: roomParam,
-            player: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
-          })
-        );
-      }
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === 'ROOM_STATE' && data.room) {
-            const room = data.room;
-            setActiveRoomId(room.id);
-            setActiveRoomName(room.name);
-            setTotalRounds(room.totalRounds);
-            setCurrentRound(room.currentRound);
-            setRoundPhase(room.roundPhase === 'resolved' ? 'resolved' : 'interrogation');
-            setTargetRoleToCatch(room.targetRoleToCatch);
-            setAccusedPlayerId(room.accusedPlayerId);
-            setIsCorrectGuess(room.isCorrectGuess);
-
-            setPlayers(
-              room.players.map((rp: any) => ({
-                id: rp.id,
-                name: rp.name,
-                isBot: rp.isBot,
-                avatarEmoji: rp.avatarEmoji,
-                role: rp.role,
-                chitIndex: rp.seatIndex,
-                hasSeenChit: true,
-                currentReaction: rp.currentReaction,
-                currentDialogue: rp.currentDialogue,
-                scoreHistory: rp.scoreHistory || [],
-                totalScore: rp.totalScore || 0,
-              }))
-            );
-
-            if (room.status === 'playing') {
-              setPhase('playing');
-              setIsRoomHubOpen(false);
-            } else if (room.status === 'finished') {
-              setPhase('scoreboard');
-            }
-          } else if (data.type === 'MATCHMAKING_STATUS') {
-            setIsMatchmakingActive(true);
-            setMatchmakingWaitingCount(data.waitingCount || 1);
-          } else if (data.type === 'ERROR') {
-            setErrorMessage(data.message);
-            setTimeout(() => setErrorMessage(null), 4000);
-          }
-        } catch (err) {
-          console.error('WS Message Error:', err);
-        }
-      };
-
-      wsRef.current = ws;
-    } catch (err) {
-      console.warn('Room connection could not be initialized:', err);
-    }
-
-    return () => {
-      ws?.close();
-    };
-  }, [playerId]);
-
-  // Profile & Names Save
-  const handleSaveProfile = (
-    newName: string,
-    newEmoji: string,
-    newX: string,
-    newY: string,
-    newZ: string
-  ) => {
-    setPlayerName(newName);
-    setPlayerEmoji(newEmoji);
-    setNameX(newX);
-    setNameY(newY);
-    setNameZ(newZ);
-    localStorage.setItem('cpdb_player_name', newName);
-    localStorage.setItem('cpdb_player_emoji', newEmoji);
-    localStorage.setItem('cpdb_player_x', newX);
-    localStorage.setItem('cpdb_player_y', newY);
-    localStorage.setItem('cpdb_player_z', newZ);
-
-    setPlayers((prev) =>
-      prev.map((p, idx) => {
-        if (p.id === playerId || idx === 0) {
-          return { ...p, name: newName, avatarEmoji: newEmoji };
-        }
-        if (idx === 1 || p.id === 'bot-1') {
-          return { ...p, name: newX };
-        }
-        if (idx === 2 || p.id === 'bot-2') {
-          return { ...p, name: newY };
-        }
-        if (idx === 3 || p.id === 'bot-3') {
-          return { ...p, name: newZ };
-        }
-        return p;
-      })
-    );
-  };
-
-  const handleToggleMute = () => {
-    const muted = sound.toggleMute();
-    setIsMuted(muted);
-  };
-
-  const handleCopyRoomLink = () => {
-    if (!activeRoomId) return;
-    const shareUrl = `${window.location.origin}?room=${activeRoomId}`;
-    navigator.clipboard.writeText(shareUrl);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
-  };
-
-  // Start Offline Match (1 Human + 3 Bots)
-  const handleStartBotMatch = () => {
-    setGameMode('vsBots');
-    wsRef.current?.leaveRoom();
-    setActiveRoomId(null);
-    setCurrentRound(1);
-    sound.playChitDrop();
-
-    const initialBotPlayers: PaperPlayer[] = [
-      {
-        id: playerId,
-        name: playerName,
-        isBot: false,
-        avatarEmoji: playerEmoji,
-        role: 'babu',
-        chitIndex: 0,
-        hasSeenChit: true,
-        currentReaction: BLUFF_REACTIONS[0].text,
-        currentDialogue: '',
-        scoreHistory: [],
-        totalScore: 0,
-      },
-      {
-        id: 'bot-1',
-        name: nameX,
-        isBot: true,
-        avatarEmoji: '👦',
-        role: 'police',
-        chitIndex: 1,
-        hasSeenChit: true,
-        currentReaction: BLUFF_REACTIONS[1].text,
-        currentDialogue: '',
-        scoreHistory: [],
-        totalScore: 0,
-      },
-      {
-        id: 'bot-2',
-        name: nameY,
-        isBot: true,
-        avatarEmoji: '🧔',
-        role: 'dakat',
-        chitIndex: 2,
-        hasSeenChit: true,
-        currentReaction: BLUFF_REACTIONS[2].text,
-        currentDialogue: '',
-        scoreHistory: [],
-        totalScore: 0,
-      },
-      {
-        id: 'bot-3',
-        name: nameZ,
-        isBot: true,
-        avatarEmoji: '👧',
-        role: 'chor',
-        chitIndex: 3,
-        hasSeenChit: true,
-        currentReaction: BLUFF_REACTIONS[3].text,
-        currentDialogue: '',
-        scoreHistory: [],
-        totalScore: 0,
-      },
-    ];
-
-    startLocalRound(1, initialBotPlayers, true);
-    setPhase('playing');
-  };
-
-  // Start Pass & Play Match (4 Humans on 1 Device)
-  const handleStartPassAndPlay = (customNames: string[], rounds: number) => {
-    setGameMode('passAndPlay');
-    wsRef.current?.leaveRoom();
-    setActiveRoomId(null);
-    setTotalRounds(rounds);
-    setCurrentRound(1);
-    sound.playChitDrop();
-
-    const emojis = ['🧑‍🎓', '👦', '👧', '🧔'];
-    const initialHumanPlayers: PaperPlayer[] = customNames.map((name, idx) => ({
-      id: `seat-${idx + 1}`,
-      name,
-      isBot: false,
-      avatarEmoji: emojis[idx],
-      role: 'babu',
-      chitIndex: idx,
-      hasSeenChit: true,
-      currentReaction: BLUFF_REACTIONS[idx % BLUFF_REACTIONS.length].text,
-      currentDialogue: '',
-      scoreHistory: [],
-      totalScore: 0,
-    }));
-
-    startLocalRound(1, initialHumanPlayers, true);
-    setPhase('playing');
-  };
-
-  const shuffleRoles = (): RoleType[] => {
-    const roles: RoleType[] = ['babu', 'police', 'dakat', 'chor'];
-    for (let i = roles.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [roles[i], roles[j]] = [roles[j], roles[i]];
-    }
-    return roles;
-  };
-
-  // Start a local round
-  const startLocalRound = (
-    roundNum: number,
-    explicitPlayers?: PaperPlayer[],
-    isNewMatch = false
-  ) => {
-    const roles = shuffleRoles();
-
-    setPlayers((prev) => {
-      const source = explicitPlayers || prev;
-      return source.map((player, idx) => {
-        const assignedRole = roles[idx];
-        const roleDef = ROLE_DEFINITIONS[assignedRole];
-        const randomDialogue =
-          roleDef.dialogues[Math.floor(Math.random() * roleDef.dialogues.length)];
-        const randomReaction =
-          BLUFF_REACTIONS[Math.floor(Math.random() * BLUFF_REACTIONS.length)].text;
-
-        return {
-          ...player,
-          role: assignedRole,
-          hasSeenChit: true,
-          currentDialogue: randomDialogue,
-          currentReaction: randomReaction,
-          scoreHistory: isNewMatch ? [] : player.scoreHistory,
-          totalScore: isNewMatch ? 0 : player.totalScore,
-        };
+    const roomParam = new URLSearchParams(window.location.search).get('room');
+    if (roomParam) {
+      conn.send({
+        type: 'JOIN_ROOM',
+        roomId: roomParam,
+        player: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
       });
-    });
+    }
+    return () => conn.close();
+    // Connect once per player; profile changes are sent with each action instead
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerId, applyRoomMessage]);
 
+  const sendRoomAction = (action: Record<string, unknown>) => connRef.current?.send(action);
+  const me = { id: playerId, name: playerName, avatarEmoji: playerEmoji };
+
+  const leaveOnlineRoom = () => {
+    connRef.current?.leaveRoom();
+    setActiveRoom(null);
+    setIsMatchmakingActive(false);
+    setReactions([]);
+    prevHumansRef.current = null;
+    if (window.location.search) window.history.replaceState(null, '', roomUrl());
+  };
+
+  // ---- Local matches ----
+  const startLocalMatch = (mode: GameMode, seats: PaperPlayer[], rounds: number) => {
+    leaveOnlineRoom();
+    setGameMode(mode);
+    setTotalRounds(rounds);
+    sound.playChitDrop();
+    dealLocalRound(1, seats);
+    setPhase('playing');
+  };
+
+  const dealLocalRound = (roundNum: number, seats: PaperPlayer[]) => {
+    setPlayers(dealRoles(seats));
     setAccusedPlayerId(null);
     setIsCorrectGuess(false);
-    setIsBotPoliceThinking(false);
-    setBotPoliceThoughtText(null);
     setRoundPhase('interrogation');
+    setTargetRoleToCatch('dakat');
     setCurrentRound(roundNum);
-
-    // If Bot is Police, trigger AI investigation
-    const policeIdx = roles.indexOf('police');
-    setTimeout(() => {
-      setPlayers((current) => {
-        const pol = current[policeIdx];
-        if (pol && pol.isBot) {
-          triggerBotPoliceDeduction(pol, current);
-        }
-        return current;
-      });
-    }, 200);
+    setDealId((d) => d + 1);
   };
 
-  // Bot Police AI Investigation
-  const triggerBotPoliceDeduction = (police: PaperPlayer, currentPlayersList = players) => {
-    setIsBotPoliceThinking(true);
-    setBotPoliceThoughtText(
-      `দারোগা ${police.name} সন্দেহভাজনদের চোখ ও অভিব্যক্তিতে চোর-ডাকাত খুঁজছেন...`
+  const handleStartBotMatch = () => {
+    startLocalMatch(
+      'vsBots',
+      [
+        newPlayer(playerId, playerName, playerEmoji, false),
+        ...BOT_SEATS.map((b, i) => newPlayer(b.id, botNames[i], b.emoji, true)),
+      ],
+      totalRounds
     );
-
-    setTimeout(() => {
-      sound.playPoliceWhistle();
-      const suspects = currentPlayersList.filter((p) => p.role !== 'babu' && p.role !== 'police');
-      const targetSuspect = suspects.find((p) => p.role === targetRoleToCatch)!;
-      const otherSuspect = suspects.find((p) => p.role !== targetRoleToCatch)!;
-
-      // 35% chance to identify target criminal
-      const isAccurate = Math.random() < 0.35;
-      const chosenSuspect = isAccurate ? targetSuspect : otherSuspect;
-
-      setIsBotPoliceThinking(false);
-      setBotPoliceThoughtText(null);
-      handleExecuteAccusation(chosenSuspect.id, currentPlayersList);
-    }, 2200);
   };
 
-  // Accuse Suspect
-  const handleExecuteAccusation = (suspectPlayerId: string, currentPlayersList = players) => {
-    if (activeRoomId && wsRef.current?.readyState === RoomConnection.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: 'ACCUSE_SUSPECT', roomId: activeRoomId, suspectPlayerId })
-      );
-    } else {
-      const accused = currentPlayersList.find((p) => p.id === suspectPlayerId)!;
-      const isCorrect = accused.role === targetRoleToCatch;
+  const handleStartPassAndPlay = (names: string[], rounds: number) => {
+    startLocalMatch(
+      'passAndPlay',
+      names.map((name, idx) => newPlayer(`seat-${idx + 1}`, name, PASS_AND_PLAY_EMOJIS[idx], false)),
+      rounds
+    );
+  };
 
-      setAccusedPlayerId(suspectPlayerId);
-      setIsCorrectGuess(isCorrect);
-      setRoundPhase('resolved');
+  const handlePlayAgain = () => {
+    if (gameMode === 'vsBots') handleStartBotMatch();
+    else startLocalMatch(gameMode, players.map((p) => newPlayer(p.id, p.name, p.avatarEmoji, p.isBot)), totalRounds);
+  };
 
-      // AUTOMATICALLY CALCULATE & ADD SCORE TO KHATA IMMEDIATELY FOR THIS ROUND!
-      setPlayers((prev) =>
-        prev.map((p) => {
-          let earned = 0;
-          if (p.role === 'babu') earned = 1000;
-          else if (p.role === 'police') earned = isCorrect ? 500 : 0;
-          else if (p.role === 'dakat') {
-            earned = targetRoleToCatch === 'dakat' && isCorrect && p.id === suspectPlayerId ? 0 : 400;
-          } else if (p.role === 'chor') {
-            earned = targetRoleToCatch === 'chor' && isCorrect && p.id === suspectPlayerId ? 0 : 100;
-          }
+  const resolveLocalAccusation = (suspectId: string, target: TargetRole) => {
+    const accused = players.find((p) => p.id === suspectId);
+    if (!accused || roundPhase !== 'interrogation') return;
+    const isCorrect = accused.role === target;
 
-          return {
-            ...p,
-            scoreHistory: [...p.scoreHistory, earned],
-            totalScore: p.totalScore + earned,
-          };
-        })
-      );
+    setAccusedPlayerId(suspectId);
+    setIsCorrectGuess(isCorrect);
+    setRoundPhase('resolved');
+    setPlayers((prev) =>
+      prev.map((p) => {
+        const earned = roundPoints(p.role as RoleType, isCorrect, p.id === suspectId, target);
+        return { ...p, scoreHistory: [...p.scoreHistory, earned], totalScore: p.totalScore + earned };
+      })
+    );
+    playVerdict(isCorrect);
+  };
 
-      sound.playPenScratch(); // Pen scratch sound as scores are recorded into the khata!
-      if (isCorrect) sound.playSuccess();
-      else sound.playWrong();
+  // ---- Round actions ----
+  const handleSetTarget = (role: TargetRole) => {
+    setTargetRoleToCatch(role);
+    if (isOnline) sendRoomAction({ type: 'SET_TARGET_ROLE', roomId: activeRoom!.id, targetRole: role });
+  };
+
+  const handleAccuse = (suspectId: string) => {
+    sound.playPoliceWhistle();
+    if (isOnline) {
+      sendRoomAction({ type: 'ACCUSE_SUSPECT', roomId: activeRoom!.id, suspectPlayerId: suspectId, targetRole: targetRoleToCatch });
     }
+    else resolveLocalAccusation(suspectId, targetRoleToCatch);
   };
 
-  // Next Round
   const handleNextRound = () => {
-    sound.playPenScratch();
-    if (activeRoomId && wsRef.current?.readyState === RoomConnection.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({ type: 'NEXT_ROUND', roomId: activeRoomId })
-      );
+    sound.playChitDrop();
+    if (isOnline) {
+      sendRoomAction({ type: 'NEXT_ROUND', roomId: activeRoom!.id });
+    } else if (currentRound >= totalRounds) {
+      sound.playVictory();
+      setPhase('scoreboard');
     } else {
-      if (currentRound >= totalRounds) {
-        sound.playVictory();
-        setPhase('scoreboard');
-      } else {
-        sound.playChitDrop();
-        startLocalRound(currentRound + 1);
+      dealLocalRound(currentRound + 1, players);
+    }
+  };
+
+  // Bot police (local modes): think for a moment, then accuse.
+  const police = players.find((p) => p.role === 'police');
+  const botPoliceActive = phase === 'playing' && roundPhase === 'interrogation' && !!police?.isBot;
+
+  useEffect(() => {
+    if (!botPoliceActive || isOnline) return;
+    const target: TargetRole = Math.random() < 0.5 ? 'chor' : 'dakat';
+    setTargetRoleToCatch(target);
+    const t = setTimeout(() => {
+      const suspects = players.filter((p) => isSuspectRole(p.role));
+      const correct = suspects.find((p) => p.role === target)!;
+      const wrong = suspects.find((p) => p.role !== target)!;
+      sound.playPoliceWhistle();
+      resolveLocalAccusation(Math.random() < BOT_POLICE_ACCURACY ? correct.id : wrong.id, target);
+    }, BOT_POLICE_THINK_MS);
+    return () => clearTimeout(t);
+    // Runs once per dealt round; players/roles are fixed for that round
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botPoliceActive, dealId, isOnline]);
+
+  // Online: the server has no timers, so nudge it with TICK once a deadline passes
+  // (police turn, auto next round) or while the police has gone offline.
+  const onlineDeadline = roundPhase === 'resolved' ? roomTimers.nextRoundAt : roomTimers.turnDeadline;
+  const policeOffline = roundPhase === 'interrogation' && police?.isOnline === false;
+  useEffect(() => {
+    if (!isOnline || phase !== 'playing' || !onlineDeadline) return;
+    const roomId = activeRoom!.id;
+    const tick = () => sendRoomAction({ type: 'TICK', roomId });
+    let retry: ReturnType<typeof setInterval> | undefined;
+    const wait = policeOffline ? 3000 : Math.max(0, onlineDeadline - connRef.current!.serverNow()) + 150;
+    const t = setTimeout(() => {
+      tick();
+      retry = setInterval(tick, 2500);
+    }, wait);
+    return () => {
+      clearTimeout(t);
+      clearInterval(retry);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOnline, phase, onlineDeadline, policeOffline, activeRoom?.id]);
+
+  const toLocalTime = (serverTime?: number) =>
+    serverTime === undefined ? undefined : serverTime - (connRef.current?.serverOffset ?? 0);
+
+  const handleReact = (text: string) => {
+    if (isOnline) sendRoomAction({ type: 'REACT', roomId: activeRoom!.id, text });
+  };
+  const handleRematch = () => {
+    sound.playChitDrop();
+    if (activeRoom) sendRoomAction({ type: 'REMATCH', roomId: activeRoom.id });
+  };
+
+  // ---- Online hub actions ----
+  const handleCreateRoom = (roomName: string, rounds: number, fillBots: boolean) =>
+    sendRoomAction({
+      type: 'CREATE_ROOM',
+      roomName,
+      totalRounds: rounds,
+      isPublic: true,
+      fillWithBots: fillBots,
+      hostPlayer: me,
+    });
+  const handleJoinRoom = (roomId: string) => sendRoomAction({ type: 'JOIN_ROOM', roomId, player: me });
+  const handleJoinMatchmaking = () => sendRoomAction({ type: 'JOIN_MATCHMAKING', player: me });
+  const handleCancelMatchmaking = () => {
+    sendRoomAction({ type: 'LEAVE_MATCHMAKING' });
+    setIsMatchmakingActive(false);
+  };
+  const handleStartWaitingRoom = () => activeRoom && sendRoomAction({ type: 'START_GAME', roomId: activeRoom.id });
+
+  // ---- Profile / chrome ----
+  const handleSaveProfile = (newName: string, newEmoji: string, newX: string, newY: string, newZ: string) => {
+    setPlayerName(newName);
+    setPlayerEmoji(newEmoji);
+    setBotNames([newX, newY, newZ]);
+    writeStore('cpdb_player_name', newName);
+    writeStore('cpdb_player_emoji', newEmoji);
+    writeStore('cpdb_player_x', newX);
+    writeStore('cpdb_player_y', newY);
+    writeStore('cpdb_player_z', newZ);
+
+    // Rename seats in a running bot match; other modes own their names
+    if (gameMode !== 'vsBots') return;
+    const names: Record<string, [string, string?]> = {
+      [playerId]: [newName, newEmoji],
+      'bot-1': [newX],
+      'bot-2': [newY],
+      'bot-3': [newZ],
+    };
+    setPlayers((prev) =>
+      prev.map((p) =>
+        names[p.id] ? { ...p, name: names[p.id][0], avatarEmoji: names[p.id][1] ?? p.avatarEmoji } : p
+      )
+    );
+  };
+
+  const handleSetBgTheme = (theme: BgTheme) => {
+    setBgTheme(theme);
+    writeStore('cpdb_bg_theme', theme);
+  };
+
+  const handleToggleMute = () => setIsMuted(sound.toggleMute());
+
+  const handleCopyRoomLink = async () => {
+    if (!activeRoom) return;
+    const url = roomUrl(activeRoom.id);
+    try {
+      if (navigator.share && window.matchMedia('(pointer: coarse)').matches) {
+        await navigator.share({ title: 'চোর-পুলিশ-ডাকাত-বাবু', text: `রুম কোড: ${activeRoom.id}`, url });
+        return;
       }
+      await navigator.clipboard.writeText(url);
+      setCopiedLink(true);
+      setTimeout(() => setCopiedLink(false), 2000);
+    } catch (err) {
+      if ((err as Error)?.name !== 'AbortError') showToast(`লিংক কপি করা যায়নি। রুম কোড: ${activeRoom.id}`);
     }
   };
 
-  // Room Hub actions
-  const handleCreateRoom = (roomName: string, rounds: number, fillBots: boolean) => {
-    if (wsRef.current?.readyState === RoomConnection.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'CREATE_ROOM',
-          roomName,
-          totalRounds: rounds,
-          isPublic: true,
-          fillWithBots: fillBots,
-          hostPlayer: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
-        })
-      );
-    }
+  const goToLobby = () => {
+    const question = isOnline ? 'রুম ছেড়ে দেবেন? আপনার আসনে একটি বট বসবে।' : 'চলমান ম্যাচ ছেড়ে লবিতে ফিরে যাবেন?';
+    if (phase === 'playing' && !window.confirm(question)) return;
+    leaveOnlineRoom();
+    setPhase('lobby');
   };
 
-  const handleJoinRoom = (roomId: string) => {
-    if (wsRef.current?.readyState === RoomConnection.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'JOIN_ROOM',
-          roomId,
-          player: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
-        })
-      );
-    }
+  const openScoreDrawer = () => {
+    sound.playPaperRustle();
+    setModal('score');
   };
-
-  const handleJoinMatchmaking = () => {
-    if (wsRef.current?.readyState === RoomConnection.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'JOIN_MATCHMAKING',
-          player: { id: playerId, name: playerName, avatarEmoji: playerEmoji },
-        })
-      );
-    }
-  };
+  const closeModal = () => setModal(null);
 
   return (
-    <div className={`min-h-screen ${bgThemeClass} text-amber-100 flex flex-col font-sans select-none transition-colors duration-500`}>
-      {/* Top Bar with Brand, Name Profile, Room Code, Theme Switcher, and Quick Actions */}
-      <header className="w-full max-w-5xl mx-auto flex items-center justify-between gap-2 sm:gap-3 px-3 sm:px-6 py-2.5 border-b border-amber-900/60 bg-black/45 backdrop-blur-md">
-        {/* Brand */}
-        <div
-          onClick={() => setPhase('lobby')}
-          className="flex items-center gap-2 cursor-pointer group shrink-0"
-        >
-          <div className="w-8 h-8 rounded-lg bg-amber-600/30 border border-amber-500/50 flex items-center justify-center text-amber-300 font-serif font-black shadow">
-            ব
-          </div>
-          <div className="hidden sm:block">
-            <h1 className="text-base font-black text-amber-100 font-serif tracking-tight group-hover:text-amber-300 transition-colors">
-              চোর-পুলিশ-ডাকাত-বাবু
-            </h1>
-            <div className="text-[10px] text-amber-400/80 font-mono">
-              ৪ বন্ধু ৪ পাশে · নস্টালজিক পেপার চিরকুট
+    <div className={`min-h-dvh theme-${bgTheme} text-amber-100 flex flex-col transition-colors duration-500`}>
+      <header className="sticky top-0 z-40 w-full border-b border-amber-900/60 bg-black/70 backdrop-blur-md">
+        <div className="max-w-5xl mx-auto flex items-center justify-between gap-2 px-3 sm:px-6 py-2">
+          <button type="button" onClick={goToLobby} className="flex items-center gap-2 group shrink-0 text-left" aria-label="লবিতে ফিরুন">
+            <div className="w-9 h-9 rounded-lg bg-amber-600/30 border border-amber-500/50 flex items-center justify-center text-amber-300 font-black text-lg">
+              ব
             </div>
+            <div className="hidden sm:block">
+              <div className="text-base font-black text-amber-100 tracking-tight group-hover:text-amber-300 transition-colors">
+                চোর-পুলিশ-ডাকাত-বাবু
+              </div>
+              <div className="text-[11px] text-amber-400/80">৪ বন্ধু ৪ পাশে · নস্টালজিক চিরকুট</div>
+            </div>
+          </button>
+
+          {activeRoom && (
+            <div className="flex items-center gap-1 p-1 bg-amber-950/90 border border-amber-700/80 rounded-lg text-xs font-mono min-w-0">
+              <span className="text-[11px] text-amber-500 hidden sm:inline pl-1">রুম:</span>
+              <strong className="text-amber-300 px-1">{activeRoom.id}</strong>
+              <button
+                type="button"
+                onClick={handleCopyRoomLink}
+                className="p-1.5 bg-amber-800 hover:bg-amber-700 rounded text-amber-200 transition-colors flex items-center gap-1"
+                aria-label="রুমের আমন্ত্রণ লিংক শেয়ার করুন"
+              >
+                {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Share2 className="w-3.5 h-3.5" />}
+                <span className="text-[11px] hidden sm:inline">{copiedLink ? 'কপি হয়েছে' : 'শেয়ার'}</span>
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            <div className="hidden xs:flex items-center gap-1 p-1 bg-black/60 border border-amber-800/60 rounded-full" role="radiogroup" aria-label="ব্যাকগ্রাউন্ড রঙ">
+              {THEMES.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={bgTheme === t.id}
+                  aria-label={t.label}
+                  title={t.label}
+                  onClick={() => handleSetBgTheme(t.id)}
+                  className={`w-5 h-5 rounded-full border-2 transition-transform ${
+                    bgTheme === t.id ? 'border-amber-200 scale-110' : 'border-transparent opacity-70 hover:opacity-100'
+                  }`}
+                  style={{ backgroundColor: t.swatch }}
+                />
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setModal('profile')}
+              className="px-2 sm:px-2.5 py-1.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 rounded-lg text-xs font-bangla-hand font-bold text-amber-200 transition-colors flex items-center gap-1.5"
+              aria-label="প্রোফাইল ও নাম পরিবর্তন"
+            >
+              <span aria-hidden>{playerEmoji}</span>
+              <span className="max-w-[72px] sm:max-w-[110px] truncate">{playerName}</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setModal('online')}
+              className="p-1.5 md:px-2.5 bg-blue-900/70 hover:bg-blue-800 border border-blue-500/60 rounded-lg text-xs text-blue-200 transition-colors flex items-center gap-1"
+              aria-label="অনলাইন রুম"
+            >
+              <Globe className="w-4 h-4 text-blue-300" />
+              <span className="hidden md:inline font-bold">অনলাইন</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setModal('rules')}
+              className="p-1.5 bg-amber-950/60 hover:bg-amber-900 border border-amber-800 rounded-lg text-amber-200 transition-colors"
+              aria-label="নিয়মাবলী"
+              title="নিয়মাবলী"
+            >
+              <BookOpen className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={handleToggleMute}
+              className="p-1.5 bg-amber-950/60 hover:bg-amber-900 border border-amber-800 rounded-lg text-amber-200 transition-colors"
+              aria-label={isMuted ? 'আনমিউট করুন' : 'মিউট করুন'}
+              aria-pressed={isMuted}
+              title={isMuted ? 'আনমিউট করুন' : 'মিউট করুন'}
+            >
+              {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+            </button>
           </div>
-        </div>
-
-        {/* Center Room Code & Share Strip (Active in Room) */}
-        {activeRoomId && (
-          <div className="flex items-center gap-1.5 p-1 bg-amber-950/90 border border-amber-700/80 rounded-lg text-xs font-mono">
-            <span className="text-[10px] text-amber-500 hidden sm:inline">রুম:</span>
-            <strong className="text-amber-300 px-1">{activeRoomId}</strong>
-            <button
-              onClick={handleCopyRoomLink}
-              className="p-1 bg-amber-800 hover:bg-amber-700 rounded text-amber-200 transition-colors flex items-center gap-1"
-              title="রুমের আমন্ত্রণ লিংক কপি করুন"
-            >
-              {copiedLink ? (
-                <Check className="w-3.5 h-3.5 text-emerald-300" />
-              ) : (
-                <Share2 className="w-3.5 h-3.5" />
-              )}
-              <span className="text-[10px] hidden sm:inline">
-                {copiedLink ? 'কপি হয়েছে' : 'শেয়ার'}
-              </span>
-            </button>
-          </div>
-        )}
-
-        {/* Right Controls */}
-        <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
-          {/* Background Color / Theme Palette Switcher */}
-          <div className="flex items-center gap-0.5 sm:gap-1 p-0.5 sm:p-1 bg-black/60 border border-amber-800/60 rounded-xl" title="ব্যাকগ্রাউন্ড রঙ পরিবর্তন করুন">
-            <Palette className="w-3.5 h-3.5 text-amber-300 ml-0.5 hidden xs:inline" />
-            <button
-              type="button"
-              onClick={() => handleSetBgTheme('wood')}
-              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-all ${
-                bgTheme === 'wood'
-                  ? 'bg-amber-600 text-slate-950 shadow'
-                  : 'text-amber-200/70 hover:text-amber-100'
-              }`}
-              title="সেগুন কাঠ (Teak Wood)"
-            >
-              🪵 কাঠ
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSetBgTheme('green')}
-              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-all ${
-                bgTheme === 'green'
-                  ? 'bg-emerald-600 text-white shadow'
-                  : 'text-emerald-200/70 hover:text-emerald-100'
-              }`}
-              title="সবুজ ব্ল্যাকবোর্ড (Green Chalkboard)"
-            >
-              🌿 সবুজ
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSetBgTheme('navy')}
-              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-all ${
-                bgTheme === 'navy'
-                  ? 'bg-blue-600 text-white shadow'
-                  : 'text-blue-200/70 hover:text-blue-100'
-              }`}
-              title="নীল কালির বোর্ড (Royal Ink Navy)"
-            >
-              🖋️ নীল
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSetBgTheme('mahogany')}
-              className={`px-1.5 py-0.5 rounded text-[11px] font-bold transition-all ${
-                bgTheme === 'mahogany'
-                  ? 'bg-rose-800 text-white shadow'
-                  : 'text-rose-200/70 hover:text-rose-100'
-              }`}
-              title="মেহগনি ডেস্ক (Mahogany Desk)"
-            >
-              🏫 মেহগনি
-            </button>
-          </div>
-
-          {/* Custom Name Profile Button */}
-          <button
-            onClick={() => setIsProfileModalOpen(true)}
-            className="px-2 sm:px-2.5 py-1.5 bg-amber-950/80 hover:bg-amber-900 border border-amber-700 rounded-lg text-xs font-bangla-hand font-bold text-amber-200 transition-colors flex items-center gap-1.5 shadow"
-            title="খেলোয়াড়দের নাম পরিবর্তন করুন (আপনি, X, Y, Z)"
-          >
-            <span>{playerEmoji}</span>
-            <span className="max-w-[70px] sm:max-w-[100px] truncate">{playerName}</span>
-            <span className="text-[10px] text-amber-400 font-mono hidden md:inline">| {nameX}, {nameY}, {nameZ}</span>
-          </button>
-
-          {/* Open Room Hub Button */}
-          <button
-            onClick={() => setIsRoomHubOpen(true)}
-            className="px-2 py-1.5 bg-blue-900/70 hover:bg-blue-800 border border-blue-500/60 rounded-lg text-xs font-serif text-blue-200 transition-colors flex items-center gap-1 shadow"
-            title="অনলাইন রুম ও র্যান্ডম ৪ জন ম্যাচমেকিং"
-          >
-            <Globe className="w-3.5 h-3.5 text-blue-300" />
-            <span className="hidden md:inline font-bold">অনলাইন</span>
-          </button>
-
-          {/* Rules Button */}
-          <button
-            onClick={() => setIsRulesOpen(true)}
-            className="p-1.5 bg-amber-950/60 hover:bg-amber-900 border border-amber-800 rounded-lg text-amber-200 transition-colors"
-            title="নিয়মাবলী"
-          >
-            <BookOpen className="w-4 h-4" />
-          </button>
-
-          {/* Sound Mute */}
-          <button
-            onClick={handleToggleMute}
-            className="p-1.5 bg-amber-950/60 hover:bg-amber-900 border border-amber-800 rounded-lg text-amber-200 transition-colors"
-            title={isMuted ? 'আনমিউট করুন' : 'মিউট করুন'}
-          >
-            {isMuted ? (
-              <VolumeX className="w-4 h-4 text-rose-400" />
-            ) : (
-              <Volume2 className="w-4 h-4 text-emerald-400" />
-            )}
-          </button>
         </div>
       </header>
 
-      {/* Floating Error Toast Notification */}
-      {errorMessage && (
-        <div className="fixed top-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-rose-900 border-2 border-rose-500 text-rose-100 rounded-xl shadow-2xl text-xs font-bangla-hand flex items-center gap-2 animate-in fade-in slide-in-from-top-2">
-          <span>⚠️ {errorMessage}</span>
-          <button
-            onClick={() => setErrorMessage(null)}
-            className="text-rose-300 hover:text-white font-bold ml-1 text-sm leading-none"
-          >
+      {isOnline && !isConnected && (
+        <div role="status" className="sticky top-[53px] z-30 w-full bg-amber-500 text-amber-950 text-sm font-bold text-center py-1.5 px-3">
+          ⏳ সংযোগ বিচ্ছিন্ন — আবার চেষ্টা করা হচ্ছে…
+        </div>
+      )}
+
+      {toast && (
+        <div
+          role={toast.tone === 'error' ? 'alert' : 'status'}
+          className={`fixed top-16 left-1/2 -translate-x-1/2 z-[60] w-[calc(100%-2rem)] max-w-md px-4 py-2.5 border-2 rounded-xl shadow-2xl text-sm font-bangla-hand flex items-center gap-2 anim-drop ${
+            toast.tone === 'error' ? 'bg-rose-900 border-rose-500 text-rose-100' : 'bg-emerald-900 border-emerald-500 text-emerald-50'
+          }`}
+        >
+          <span className="flex-1">{toast.tone === 'error' ? '⚠️ ' : ''}{toast.text}</span>
+          <button type="button" onClick={() => setToast(null)} className="text-rose-300 hover:text-white font-bold px-1" aria-label="বন্ধ করুন">
             ✕
           </button>
         </div>
       )}
 
-      {/* Main Game Surface */}
-      <main className="flex-1 w-full max-w-5xl mx-auto px-3 sm:px-6 py-4 flex flex-col items-center justify-center">
-        {/* SCREEN 1: LOBBY */}
+      <main className="flex-1 w-full max-w-5xl mx-auto px-3 sm:px-6 py-4 sm:py-6 flex flex-col items-center justify-center">
         {phase === 'lobby' && (
-          <div className="w-full max-w-2xl flex flex-col items-center text-center my-auto animate-in fade-in duration-300">
-            {/* Player Welcome Badge */}
-            <div className="inline-flex items-center gap-2 px-3.5 py-1 bg-amber-500/10 border border-amber-500/30 rounded-full text-amber-300 text-xs font-bangla-hand mb-3">
-              <span>খেলোয়াড়: {playerEmoji} {playerName}</span>
-              <button
-                onClick={() => setIsProfileModalOpen(true)}
-                className="text-amber-400 hover:text-white underline text-[11px]"
-              >
-                (নাম বদলান)
-              </button>
-            </div>
+          <div className="w-full max-w-3xl flex flex-col items-center text-center my-auto anim-fade">
+            <button
+              type="button"
+              onClick={() => setModal('profile')}
+              className="inline-flex items-center gap-2 px-3.5 py-1 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-full text-amber-300 text-sm font-bangla-hand mb-3 transition-colors"
+            >
+              <span>
+                খেলোয়াড়: {playerEmoji} {playerName}
+              </span>
+              <span className="text-amber-400 underline text-xs">নাম বদলান</span>
+            </button>
 
-            <h2 className="text-3xl sm:text-5xl font-black text-amber-100 font-serif tracking-tight mb-2">
+            <h1 className="text-4xl sm:text-6xl font-black text-amber-100 tracking-tight mb-2 drop-shadow">
               চোর পুলিশ ডাকাত বাবু
-            </h2>
+            </h1>
+            <p className="text-amber-200/70 text-sm sm:text-base mb-5 font-bangla-hand">
+              চিরকুট খুলুন, বাবু-পুলিশ প্রকাশ্যে — পুলিশ ধরবে চোর না ডাকাত?
+            </p>
 
-            {/* Points Summary Badge */}
-            <div className="flex flex-wrap items-center justify-center gap-2 mb-6 text-xs font-bangla-hand">
-              <span className="px-3 py-1 bg-emerald-950/80 border border-emerald-600/60 rounded text-emerald-300 font-bold">
-                বাবু: ১০০০
-              </span>
-              <span className="px-3 py-1 bg-blue-950/80 border border-blue-600/60 rounded text-blue-300 font-bold">
-                পুলিশ: ৫০০
-              </span>
-              <span className="px-3 py-1 bg-rose-950/80 border border-rose-600/60 rounded text-rose-300 font-bold">
-                ডাকাত: ৪০০
-              </span>
-              <span className="px-3 py-1 bg-purple-950/80 border border-purple-600/60 rounded text-purple-300 font-bold">
-                চোর: ১০০
-              </span>
+            <div className="flex flex-wrap items-center justify-center gap-2 mb-7 text-sm font-bangla-hand">
+              {(['babu', 'police', 'dakat', 'chor'] as RoleType[]).map((r) => (
+                <span key={r} className={`role-chip role-chip-${r}`}>
+                  {ROLE_DEFINITIONS[r].emoji} {ROLE_DEFINITIONS[r].nameBn}: {toBn(ROLE_DEFINITIONS[r].points)}
+                </span>
+              ))}
             </div>
 
-            {/* THREE POLISHED GAME MODES */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 w-full mb-6 max-w-2xl">
-              {/* Play with Bots */}
-              <button
-                type="button"
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 w-full mb-6">
+              <ModeCard
                 onClick={handleStartBotMatch}
-                className="group p-5 bg-amber-950/80 hover:bg-amber-900/80 border-2 border-amber-800/80 hover:border-amber-400 rounded-2xl text-left transition-all hover:shadow-xl flex flex-col justify-between"
-              >
-                <div>
-                  <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                    <Bot className="w-5 h-5" />
-                  </div>
-                  <h3 className="text-base font-bold text-white font-serif mb-1 group-hover:text-amber-300 transition-colors">
-                    ১ জন + ৩ জন বট
-                  </h3>
-                  <p className="text-[11px] text-amber-300/70 font-bangla-hand leading-relaxed">
-                    রহিম, করিম ও ফাতেমা চার পাশে বসে দ্রুত খেলবে।
-                  </p>
-                </div>
-                <div className="mt-3 flex items-center gap-1 text-xs font-bold text-amber-400">
-                  <span>তাত্ক্ষণিক খেলা শুরু</span>
-                  <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
-                </div>
-              </button>
-
-              {/* Pass & Play (Updated for 4 friends on 1 device) */}
-              <button
-                type="button"
-                onClick={() => setIsPassAndPlayModalOpen(true)}
-                className="group p-5 bg-emerald-950/80 hover:bg-emerald-900/80 border-2 border-emerald-800/80 hover:border-emerald-400 rounded-2xl text-left transition-all hover:shadow-xl flex flex-col justify-between"
-              >
-                <div>
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                    <Users className="w-5 h-5" />
-                  </div>
-                  <h3 className="text-base font-bold text-white font-serif mb-1 group-hover:text-emerald-300 transition-colors">
-                    পাস অ্যান্ড প্লে (৪ বন্ধু)
-                  </h3>
-                  <p className="text-[11px] text-emerald-200/70 font-bangla-hand leading-relaxed">
-                    একই স্ক্রিনে চার বন্ধু বসে খেলুন। শুধু বাবু ও পুলিশ প্রকাশ পাবে!
-                  </p>
-                </div>
-                <div className="mt-3 flex items-center gap-1 text-xs font-bold text-emerald-300">
-                  <span>বন্ধুদের নাম সেট করুন</span>
-                  <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
-                </div>
-              </button>
-
-              {/* Online Room & 4 Players */}
-              <button
-                type="button"
-                onClick={() => setIsRoomHubOpen(true)}
-                className="group p-5 bg-blue-950/80 hover:bg-blue-900/80 border-2 border-blue-700/80 hover:border-blue-400 rounded-2xl text-left transition-all hover:shadow-xl flex flex-col justify-between"
-              >
-                <div>
-                  <div className="w-10 h-10 rounded-xl bg-blue-500/20 text-blue-400 flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
-                    <Globe className="w-5 h-5" />
-                  </div>
-                  <h3 className="text-base font-bold text-white font-serif mb-1 group-hover:text-blue-300 transition-colors">
-                    অনলাইন রুম ও ৪ জন
-                  </h3>
-                  <p className="text-[11px] text-blue-200/70 font-bangla-hand leading-relaxed">
-                    রুম খুঁজুন, কোড দিয়ে বন্ধুদের ডাকুন বা র্যান্ডম ৪ জন একসাথে খেলুন।
-                  </p>
-                </div>
-                <div className="mt-3 flex items-center gap-1 text-xs font-bold text-blue-300">
-                  <span>রুম হাব খুলুন 🚪</span>
-                  <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
-                </div>
-              </button>
+                tone="amber"
+                icon={<Bot className="w-5 h-5" />}
+                title="১ জন + ৩ জন বট"
+                body={`${botNames.join(', ')} চার পাশে বসে দ্রুত খেলবে।`}
+                cta="এখনই খেলা শুরু"
+              />
+              <ModeCard
+                onClick={() => setModal('passAndPlay')}
+                tone="emerald"
+                icon={<Users className="w-5 h-5" />}
+                title="পাস অ্যান্ড প্লে (৪ বন্ধু)"
+                body="একই স্ক্রিনে চার বন্ধু বসে খেলুন। শুধু বাবু ও পুলিশ প্রকাশ পাবে!"
+                cta="বন্ধুদের নাম সেট করুন"
+              />
+              <ModeCard
+                onClick={() => setModal('online')}
+                tone="blue"
+                icon={<Globe className="w-5 h-5" />}
+                title="অনলাইন রুম"
+                body="রুম কোড দিয়ে বন্ধুদের ডাকুন বা র্যান্ডম ৪ জন একসাথে খেলুন।"
+                cta="রুম হাব খুলুন"
+              />
             </div>
 
-            {/* Match Length Selector */}
-            <div className="flex items-center gap-3 p-3 bg-black/50 border border-amber-900/60 rounded-xl text-xs font-serif">
-              <span className="text-amber-300 font-bold">ম্যাচ রাউন্ড:</span>
-              {[3, 5, 10].map((r) => (
+            <div className="flex flex-wrap items-center justify-center gap-2 p-2.5 bg-black/50 border border-amber-900/60 rounded-xl text-sm" role="radiogroup" aria-label="বট ম্যাচের রাউন্ড">
+              <span className="text-amber-300 font-bold px-1">বট ম্যাচের রাউন্ড:</span>
+              {ROUND_OPTIONS.map((r) => (
                 <button
                   key={r}
+                  type="button"
+                  role="radio"
+                  aria-checked={totalRounds === r}
                   onClick={() => setTotalRounds(r)}
-                  className={`px-3 py-1 rounded-md font-mono font-bold transition-all ${
-                    totalRounds === r
-                      ? 'bg-amber-500 text-slate-950 shadow'
-                      : 'bg-amber-950/60 text-amber-300 hover:bg-amber-900'
+                  className={`px-3 py-1.5 rounded-md font-bold transition-all ${
+                    totalRounds === r ? 'bg-amber-500 text-slate-950 shadow' : 'bg-amber-950/60 text-amber-300 hover:bg-amber-900'
                   }`}
                 >
-                  {r} রাউন্ড
+                  {toBn(r)} রাউন্ড
                 </button>
               ))}
             </div>
+
+            <button type="button" onClick={() => setModal('rules')} className="mt-4 text-sm text-amber-300/80 hover:text-amber-200 underline underline-offset-4">
+              প্রথমবার খেলছেন? নিয়মগুলো দেখে নিন
+            </button>
           </div>
         )}
 
-        {/* SCREEN 2: 4-PLAYER CARD TABLE (৪ বন্ধু চার পাশে) */}
-        {phase === 'playing' && (
+        {phase === 'playing' && players.length === 4 && (
           <FourPlayerTable
             players={players}
             humanPlayerId={playerId}
+            gameMode={gameMode}
             targetRoleToCatch={targetRoleToCatch}
-            onSetTargetRoleToCatch={setTargetRoleToCatch}
-            onAccuseSuspect={handleExecuteAccusation}
-            isBotPoliceThinking={isBotPoliceThinking}
-            botPoliceThoughtText={botPoliceThoughtText}
+            onSetTargetRoleToCatch={handleSetTarget}
+            onAccuseSuspect={handleAccuse}
+            isBotPoliceThinking={botPoliceActive}
             roundPhase={roundPhase}
             accusedPlayerId={accusedPlayerId}
             isCorrectGuess={isCorrectGuess}
             onNextRound={handleNextRound}
-            onOpenScoreKhata={() => setIsScoreDrawerOpen(true)}
+            onOpenScoreKhata={openScoreDrawer}
             currentRound={currentRound}
             totalRounds={totalRounds}
-            isPassAndPlay={gameMode === 'passAndPlay'}
+            roomName={isOnline ? activeRoom!.name : undefined}
+            turnEndsAt={isOnline && roundPhase === 'interrogation' ? toLocalTime(roomTimers.turnDeadline) : undefined}
+            nextRoundAt={isOnline && roundPhase === 'resolved' ? toLocalTime(roomTimers.nextRoundAt) : undefined}
+            wasAutoAccused={isOnline && !!roomTimers.wasAutoAccused}
+            reactions={isOnline ? reactions : undefined}
+            serverOffset={connRef.current?.serverOffset ?? 0}
+            onReact={handleReact}
+            onLeave={isOnline ? goToLobby : undefined}
           />
         )}
 
-        {/* SCREEN 3: FULL NOTEBOOK SCOREBOARD AT MATCH END */}
         {phase === 'scoreboard' && (
           <NotebookScoreboard
             players={players}
-            currentRound={currentRound}
             totalRounds={totalRounds}
-            onResetMatch={() => setPhase('lobby')}
-            isMatchFinished={true}
+            onResetMatch={() => {
+              leaveOnlineRoom();
+              setPhase('lobby');
+            }}
+            onPlayAgain={gameMode === 'online' ? (activeRoom ? handleRematch : undefined) : handlePlayAgain}
+            playAgainLabel={gameMode === 'online' ? 'একই রুমে রিম্যাচ' : undefined}
           />
         )}
       </main>
 
-      {/* Persistent Floating Side Score Button (Scoreboard for this particular match) */}
-      <div className="fixed right-3 bottom-6 z-40">
-        <button
-          onClick={() => {
-            sound.playPaperRustle();
-            setIsScoreDrawerOpen(true);
-          }}
-          className="px-4 py-2.5 bg-blue-700 hover:bg-blue-600 text-white rounded-full font-bangla-hand font-bold text-xs shadow-2xl flex items-center gap-1.5 border-2 border-white/20 transition-transform hover:scale-105 active:scale-95"
-        >
-          <FileText className="w-4 h-4" />
-          <span>স্কোর খাতা 📓</span>
-        </button>
-      </div>
-
-      {/* Slide-in Score Drawer for this match */}
-      <SideScoreDrawer
-        isOpen={isScoreDrawerOpen}
-        onClose={() => setIsScoreDrawerOpen(false)}
-        players={players}
-        currentRound={currentRound}
-        totalRounds={totalRounds}
-      />
-
-      {/* Pass & Play Setup Modal */}
-      <PassAndPlaySetupModal
-        isOpen={isPassAndPlayModalOpen}
-        onClose={() => setIsPassAndPlayModalOpen(false)}
-        onStartPassAndPlay={handleStartPassAndPlay}
-        initialNames={[playerName, nameX, nameY, nameZ]}
-      />
-
-      {/* Online Room Hub Modal */}
-      <OnlineRoomHub
-        isOpen={isRoomHubOpen}
-        onClose={() => setIsRoomHubOpen(false)}
-        playerName={playerName}
-        playerEmoji={playerEmoji}
-        onCreateRoom={handleCreateRoom}
-        onJoinRoom={handleJoinRoom}
-        onJoinMatchmaking={handleJoinMatchmaking}
-        matchmakingWaitingCount={matchmakingWaitingCount}
-        isMatchmakingActive={isMatchmakingActive}
-        onCancelMatchmaking={() => {
-          wsRef.current?.send(JSON.stringify({ type: 'LEAVE_MATCHMAKING', playerId }));
-          setIsMatchmakingActive(false);
-        }}
-      />
-
-      {/* Player Profile & Names Modal */}
-      <PlayerProfileModal
-        isOpen={isProfileModalOpen}
-        onClose={() => setIsProfileModalOpen(false)}
-        currentName={playerName}
-        currentEmoji={playerEmoji}
-        nameX={nameX}
-        nameY={nameY}
-        nameZ={nameZ}
-        onSaveProfile={handleSaveProfile}
-      />
-
-      {/* Rules Modal */}
-      {isRulesOpen && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="relative w-full max-w-xl notebook-ruled-page p-6 sm:p-8 rounded-xl shadow-2xl border border-amber-300 text-slate-900 font-serif">
-            <h3 className="text-xl font-bold ink-blue-text mb-2 border-b border-blue-300 pb-2">
-              আপডেট করা চরিত্র ও পয়েন্ট বিন্যাস 📜
-            </h3>
-            <div className="space-y-3 text-xs sm:text-sm leading-relaxed font-bangla-hand">
-              <div className="p-3 bg-emerald-50 rounded border border-emerald-200">
-                <strong>👑 বাবু (Babu) — ১০০০ পয়েন্ট:</strong>
-                <div>চিরকুট পাওয়ার পর সবার সামনে প্রকাশ পাবে। বাবুর পয়েন্ট নিশ্চিত।</div>
-              </div>
-
-              <div className="p-3 bg-blue-50 rounded border border-blue-200">
-                <strong>👮‍♂️ পুলিশ (Police) — ৫০০ পয়েন্ট:</strong>
-                <div>বাবু ও পুলিশের কার্ড উন্মোচিত থাকবে। পুলিশ বাকি দুজনের মধ্যে চোর অথবা ডাকাতকে সনাক্ত করবে। সঠিক হলে ৫০০, ভুল হলে ০ পয়েন্ট।</div>
-              </div>
-
-              <div className="p-3 bg-rose-50 rounded border border-rose-200">
-                <strong>🗡️ ডাকাত (Dakat) — ৪০০ পয়েন্ট:</strong>
-                <div>কার্ড গোপন থাকবে। পুলিশ ভুল অনুমানে ধরতে না পারলে এই ৪০০ পয়েন্ট নিশ্চিত থাকবে।</div>
-              </div>
-
-              <div className="p-3 bg-purple-50 rounded border border-purple-200">
-                <strong>🥷 চোর (Chor) — ১০০ পয়েন্ট:</strong>
-                <div>কার্ড গোপন থাকবে। পুলিশ ভুল অনুমানে ধরতে না পারলে এই ১০০ পয়েন্ট নিশ্চিত থাকবে।</div>
-              </div>
-            </div>
-            <div className="mt-6 flex justify-end">
-              <button
-                onClick={() => setIsRulesOpen(false)}
-                className="px-5 py-2 bg-blue-800 hover:bg-blue-900 text-white font-bold rounded-lg text-xs"
-              >
-                বুঝেছি, খেলা চালিয়ে যাই
-              </button>
-            </div>
-          </div>
-        </div>
+      {modal === 'score' && (
+        <SideScoreDrawer onClose={closeModal} players={players} currentRound={currentRound} totalRounds={totalRounds} />
       )}
+      {modal === 'passAndPlay' && (
+        <PassAndPlaySetupModal
+          onClose={closeModal}
+          onStartPassAndPlay={handleStartPassAndPlay}
+          initialNames={[playerName, ...botNames]}
+          initialRounds={totalRounds}
+        />
+      )}
+      {modal === 'online' && (
+        <OnlineRoomHub
+          onClose={closeModal}
+          playerId={playerId}
+          playerName={playerName}
+          playerEmoji={playerEmoji}
+          onCreateRoom={handleCreateRoom}
+          onJoinRoom={handleJoinRoom}
+          onJoinMatchmaking={handleJoinMatchmaking}
+          matchmakingWaitingCount={matchmakingWaitingCount}
+          isMatchmakingActive={isMatchmakingActive}
+          onCancelMatchmaking={handleCancelMatchmaking}
+          waitingRoom={activeRoom?.status === 'waiting' ? activeRoom : null}
+          onStartWaitingRoom={handleStartWaitingRoom}
+          onLeaveWaitingRoom={leaveOnlineRoom}
+          onShareRoom={handleCopyRoomLink}
+        />
+      )}
+      {modal === 'profile' && (
+        <PlayerProfileModal
+          onClose={closeModal}
+          currentName={playerName}
+          currentEmoji={playerEmoji}
+          nameX={botNames[0]}
+          nameY={botNames[1]}
+          nameZ={botNames[2]}
+          onSaveProfile={handleSaveProfile}
+        />
+      )}
+      {modal === 'rules' && <RulesModal onClose={closeModal} />}
     </div>
   );
 }
+
+const MODE_TONES = {
+  amber: 'bg-amber-950/80 hover:bg-amber-900/80 border-amber-800/80 hover:border-amber-400 [--accent:var(--color-amber-300)]',
+  emerald: 'bg-emerald-950/80 hover:bg-emerald-900/80 border-emerald-800/80 hover:border-emerald-400 [--accent:var(--color-emerald-300)]',
+  blue: 'bg-blue-950/80 hover:bg-blue-900/80 border-blue-700/80 hover:border-blue-400 [--accent:var(--color-blue-300)]',
+};
+
+const ModeCard: React.FC<{
+  onClick: () => void;
+  tone: keyof typeof MODE_TONES;
+  icon: React.ReactNode;
+  title: string;
+  body: string;
+  cta: string;
+}> = ({ onClick, tone, icon, title, body, cta }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className={`group p-5 border-2 rounded-2xl text-left transition-all hover:-translate-y-0.5 hover:shadow-xl flex flex-col justify-between ${MODE_TONES[tone]}`}
+  >
+    <div>
+      <div className="w-10 h-10 rounded-xl bg-white/10 text-(--accent) flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+        {icon}
+      </div>
+      <h2 className="text-lg font-bold text-white mb-1 group-hover:text-(--accent) transition-colors">{title}</h2>
+      <p className="text-sm text-amber-100/70 font-bangla-hand leading-relaxed">{body}</p>
+    </div>
+    <div className="mt-3 flex items-center gap-1 text-sm font-bold text-(--accent)">
+      <span>{cta}</span>
+      <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+    </div>
+  </button>
+);
